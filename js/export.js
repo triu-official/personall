@@ -127,11 +127,26 @@ async function buildDocxObject() {
     const structuredData = window.appState.structuredData;
 
     // Helper formatting functions for Word styling
-    const createHeading = (text, level = 1) => new docx.Paragraph({
-        text: text,
-        heading: docx.HeadingLevel[`HEADING_${level}`],
-        spacing: { before: 400, after: 200 }
-    });
+    const createHeading = (text, level = 1) => {
+        let size = 24; // size in half-points (24 = 12pt)
+        let color = "2C3E50";
+        if (level === 1) { size = 32; color = "2C3E50"; }
+        else if (level === 2) { size = 26; color = "34495E"; }
+        else if (level === 3) { size = 22; color = "2980B9"; }
+
+        return new docx.Paragraph({
+            children: [
+                new docx.TextRun({
+                    text: text,
+                    bold: true,
+                    size: size,
+                    color: color,
+                    font: "Calibri"
+                })
+            ],
+            spacing: { before: level === 1 ? 400 : 200, after: level === 1 ? 200 : 100 }
+        });
+    };
 
     const createTable = (sheetName, headers, groupedRowsData, isUnclassified = false) => {
         // Color headers by sheet/transaction type
@@ -152,11 +167,17 @@ async function buildDocxObject() {
             tableHeader: true,
             children: headers.map(headerText => new docx.TableCell({
                 children: [new docx.Paragraph({
-                    text: headerText,
-                    style: "Strong"
+                    children: [
+                        new docx.TextRun({
+                            text: headerText,
+                            bold: true,
+                            font: "Calibri",
+                            size: 20 // 10pt
+                        })
+                    ]
                 })],
                 shading: { fill: headerColor },
-                margins: { top: 100, bottom: 100, left: 100, right: 100 }
+                margins: { top: 120, bottom: 120, left: 120, right: 120 }
             }))
         }));
 
@@ -167,9 +188,17 @@ async function buildDocxObject() {
                 const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
                 tableRows.push(new docx.TableRow({
                     children: headers.map(header => new docx.TableCell({
-                        children: [new docx.Paragraph({ text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '') })],
+                        children: [new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : ''),
+                                    font: "Calibri",
+                                    size: 19 // 9.5pt
+                                })
+                            ]
+                        })],
                         shading: { fill: rowColor },
-                        margins: { top: 50, bottom: 50, left: 100, right: 100 }
+                        margins: { top: 60, bottom: 60, left: 120, right: 120 }
                     }))
                 }));
             });
@@ -180,9 +209,18 @@ async function buildDocxObject() {
                 if (group.receiver !== "Unknown Receiver") {
                     tableRows.push(new docx.TableRow({
                         children: [new docx.TableCell({
-                            children: [new docx.Paragraph({ text: `Receiver: ${group.receiver}`, style: "Strong" })],
+                            children: [new docx.Paragraph({
+                                children: [
+                                    new docx.TextRun({
+                                        text: `Receiver: ${group.receiver}`,
+                                        bold: true,
+                                        font: "Calibri",
+                                        size: 20
+                                    })
+                                ]
+                            })],
                             shading: { fill: "F2F4F4" }, // Shaded gray divider row
-                            margins: { top: 50, bottom: 50, left: 100, right: 100 },
+                            margins: { top: 80, bottom: 80, left: 120, right: 120 },
                             columnSpan: headers.length
                         })]
                     }));
@@ -193,9 +231,17 @@ async function buildDocxObject() {
                     const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
                     tableRows.push(new docx.TableRow({
                         children: headers.map(header => new docx.TableCell({
-                            children: [new docx.Paragraph({ text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '') })],
+                            children: [new docx.Paragraph({
+                                children: [
+                                    new docx.TextRun({
+                                        text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : ''),
+                                        font: "Calibri",
+                                        size: 19
+                                    })
+                                ]
+                            })],
                             shading: { fill: rowColor },
-                            margins: { top: 50, bottom: 50, left: 100, right: 100 }
+                            margins: { top: 60, bottom: 60, left: 120, right: 120 }
                         }))
                     }));
                 });
@@ -249,23 +295,46 @@ async function buildDocxObject() {
 
                 // Group by receiver
                 const originalHeaders = window.appState.rawData[sheetName].headers;
-                const receiverColName = originalHeaders.find(k => k.toLowerCase() === "account no" || k.toLowerCase().includes("to account") || k.toLowerCase().includes("receiver"));
-
-                const grouped = {};
-                rows.forEach(row => {
-                    const recVal = (receiverColName && row[receiverColName]) ? String(row[receiverColName]).trim() : "Unknown Receiver";
-                    if (!grouped[recVal]) grouped[recVal] = [];
-                    grouped[recVal].push(row);
+                const primaryPatterns = window.appState.primaryEntityPatterns || [];
+                const entityCol = originalHeaders.find(k => {
+                    const kl = k.toLowerCase();
+                    return primaryPatterns.some(p => kl.includes(p));
+                });
+                const receiverColName = originalHeaders.find(k => {
+                    if (k === entityCol) return false;
+                    const kl = k.toLowerCase();
+                    return kl.includes("to account") || 
+                           kl.includes("beneficiary") || 
+                           kl.includes("receiver") || 
+                           kl.includes("transferred to") || 
+                           kl.includes("destination") ||
+                           kl === "account no" ||
+                           kl === "to_account" ||
+                           kl === "toacc";
                 });
 
-                const groupedRowsData = Object.keys(grouped).map(rec => ({
-                    receiver: rec,
-                    rows: grouped[rec]
-                }));
+                const isGroupedSheet = receiverColName !== undefined;
+
+                let tableData;
+                if (isGroupedSheet) {
+                    const grouped = {};
+                    rows.forEach(row => {
+                        const recVal = (receiverColName && row[receiverColName]) ? String(row[receiverColName]).trim() : "Unknown Receiver";
+                        if (!grouped[recVal]) grouped[recVal] = [];
+                        grouped[recVal].push(row);
+                    });
+
+                    tableData = Object.keys(grouped).map(rec => ({
+                        receiver: rec,
+                        rows: grouped[rec]
+                    }));
+                } else {
+                    tableData = rows;
+                }
 
                 entityHasContent = true;
                 entityContent.push(createHeading(`${sheetName} (${rows.length} rows)`, 3));
-                entityContent.push(createTable(sheetName, selectedCols, groupedRowsData));
+                entityContent.push(createTable(sheetName, selectedCols, tableData, !isGroupedSheet));
                 entityContent.push(new docx.Paragraph({ text: "" }));
             }
 
@@ -281,6 +350,12 @@ async function buildDocxObject() {
         }
 
         if (layerHasContent) {
+            if (docSections.length > 0) {
+                // Add page break before subsequent layers
+                docSections.push(new docx.Paragraph({
+                    children: [new docx.PageBreak()]
+                }));
+            }
             docSections.push(createHeading(`Layer: ${layerKey}`, 1));
             docSections.push(...layerSection);
         }
@@ -310,6 +385,11 @@ async function buildDocxObject() {
         }
 
         if (hasUnclassifiedContent) {
+            if (docSections.length > 0) {
+                docSections.push(new docx.Paragraph({
+                    children: [new docx.PageBreak()]
+                }));
+            }
             docSections.push(createHeading(`Unclassified Data`, 1));
             docSections.push(...unclassifiedSection);
         }
@@ -320,7 +400,15 @@ async function buildDocxObject() {
     }
 
     if (docSections.length === 0) {
-        docSections.push(new docx.Paragraph({ text: "No data matched the selected columns for export." }));
+        docSections.push(new docx.Paragraph({
+            children: [
+                new docx.TextRun({
+                    text: "No data matched the selected columns for export.",
+                    font: "Calibri",
+                    size: 22
+                })
+            ]
+        }));
     }
 
     const doc = new docx.Document({
@@ -328,8 +416,15 @@ async function buildDocxObject() {
             properties: {},
             children: [
                 new docx.Paragraph({
-                    text: "Financial Transaction Export",
-                    heading: docx.HeadingLevel.TITLE,
+                    children: [
+                        new docx.TextRun({
+                            text: "Financial Transaction Export",
+                            bold: true,
+                            size: 44, // 22pt
+                            color: "2C3E50",
+                            font: "Calibri"
+                        })
+                    ],
                     alignment: docx.AlignmentType.CENTER,
                     spacing: { after: 400 }
                 }),

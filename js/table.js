@@ -287,13 +287,52 @@ function checkCrossReference(prevLayerKey, currentEntityName) {
     const prevLayerEntities = window.appState.structuredData[prevLayerKey];
     if (!prevLayerEntities) return false;
 
+    const primaryPatterns = window.appState.primaryEntityPatterns || [];
+
     for (const senderEntity in prevLayerEntities) {
         for (const sheetName in prevLayerEntities[senderEntity]) {
-            if (sheetName.toLowerCase().includes("money transfer")) {
-                const rows = prevLayerEntities[senderEntity][sheetName];
+            const rows = prevLayerEntities[senderEntity][sheetName];
+            if (!rows || !rows.length) continue;
+
+            const rowKeys = Object.keys(rows[0]);
+            let entityCol = null;
+            for (let ki = 0; ki < rowKeys.length; ki++) {
+                const kl = rowKeys[ki].toLowerCase();
+                for (let pi = 0; pi < primaryPatterns.length; pi++) {
+                    if (kl.includes(primaryPatterns[pi])) {
+                        entityCol = rowKeys[ki];
+                        break;
+                    }
+                }
+                if (entityCol) break;
+            }
+
+            let receiverCol = null;
+            for (let ki = 0; ki < rowKeys.length; ki++) {
+                const kl = rowKeys[ki].toLowerCase();
+                if (rowKeys[ki] === entityCol) continue;
+
+                if (kl.includes("to account") || 
+                    kl.includes("beneficiary") || 
+                    kl.includes("receiver") || 
+                    kl.includes("transferred to") || 
+                    kl.includes("destination") ||
+                    kl === "account no" ||
+                    kl === "to_account" ||
+                    kl === "toacc") {
+                    receiverCol = rowKeys[ki];
+                    break;
+                }
+            }
+
+            const isMoneyTransfer = sheetName.toLowerCase().includes("money transfer") || 
+                                    sheetName.toLowerCase().includes("transfer") || 
+                                    sheetName.toLowerCase().includes("fund flow") ||
+                                    receiverCol !== null;
+
+            if (isMoneyTransfer && receiverCol) {
                 for (const row of rows) {
-                    const receiverCol = Object.keys(row).find(k => k.toLowerCase() === "account no" || k.toLowerCase().includes("to account"));
-                    if (receiverCol && String(row[receiverCol]).trim() === String(currentEntityName).trim()) {
+                    if (row[receiverCol] && String(row[receiverCol]).trim() === String(currentEntityName).trim()) {
                         return true;
                     }
                 }
@@ -466,6 +505,7 @@ function performSearch(queryText = null, updateWindowRef = true) {
         window.initMindMap();
     }
 }
+window.performSearch = performSearch;
 
 window.jumpToLayerFromSearch = function(layerKey) {
     const navigator = document.getElementById("layer-navigator");

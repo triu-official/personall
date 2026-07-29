@@ -19,7 +19,7 @@ To run this application locally without internet access, you need to download th
 
 3. **docx** (Required for Word Export functionality)
    - Download the standalone browser build of the `docx` library.
-   - Visit `https://unpkg.com/docx/build/index.js` and save the file as `libs/docx.js`.
+   - Visit `https://unpkg.com/docx/dist/index.umd.cjs` and save the file as `libs/docx.js`.
    - Alternatively: right-click the link, "Save link as..." and save to the `libs/` folder with the name `docx.js`.
    - **Important:** The file must be named exactly `libs/docx.js` (lowercase, no extension changes). Without this file, the Export to Word feature will not work.
 

@@ -38,9 +38,9 @@
     <div id="upload-overlay" class="upload-overlay active">
         <div class="upload-box" id="drop-zone">
             <h2>Upload Financial Data</h2>
-            <p>Drag and drop your Excel (.xlsx) file here</p>
+            <p>Drag and drop one or more Excel (.xlsx) files here</p>
             <p>or</p>
-            <input type="file" id="file-input" accept=".xlsx" style="display: none;">
+            <input type="file" id="file-input" accept=".xlsx" multiple style="display: none;">
             <button onclick="document.getElementById('file-input').click()">Browse Files</button>
             <div id="local-loading" style="display: none; margin-top: 15px;">
                 <div class="spinner-small"></div>
@@ -94,6 +94,22 @@
 
                 <div id="graph-view" class="view-panel">
                     <div id="graph-perf-banner" class="graph-perf-banner" style="display: none;"></div>
+                    <div class="graph-controls-overlay">
+                        <button id="btn-fullscreen" title="Toggle Fullscreen" class="control-btn">⛶</button>
+                        <div class="divider"></div>
+                        <button id="btn-zoom-in" title="Zoom In" class="control-btn">+</button>
+                        <button id="btn-zoom-out" title="Zoom Out" class="control-btn">−</button>
+                        <button id="btn-zoom-fit" title="Fit Screen" class="control-btn">⊙</button>
+                        <div class="divider"></div>
+                        <div class="pan-controls">
+                            <button id="btn-pan-up" title="Pan Up" class="control-btn">↑</button>
+                            <div class="pan-row">
+                                <button id="btn-pan-left" title="Pan Left" class="control-btn">←</button>
+                                <button id="btn-pan-down" title="Pan Down" class="control-btn">↓</button>
+                                <button id="btn-pan-right" title="Pan Right" class="control-btn">→</button>
+                            </div>
+                        </div>
+                    </div>
                     <div id="cy"></div>
                 </div>
             </main>

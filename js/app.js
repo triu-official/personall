@@ -38,13 +38,13 @@ function setupDragAndDrop() {
         e.preventDefault();
         dropZone.style.borderColor = "var(--accent-color)";
         if (e.dataTransfer.files.length) {
-            handleFile(e.dataTransfer.files[0]);
+            handleFiles(e.dataTransfer.files);
         }
     });
 
     fileInput.addEventListener("change", function (e) {
         if (e.target.files.length) {
-            handleFile(e.target.files[0]);
+            handleFiles(e.target.files);
         }
     });
 }
@@ -171,11 +171,15 @@ function buildSearchIndex(structuredData, layers) {
 }
 
 // ---------------------------------------------------------------
-// File upload handler — detects file:// and uses the correct path
+// File upload handler — supports multiple .xlsx files
 // ---------------------------------------------------------------
-function handleFile(file) {
-    if (!file.name.endsWith(".xlsx")) {
-        alert("Please upload a valid .xlsx file.");
+function handleFiles(fileList) {
+    var files = [];
+    for (var fi = 0; fi < fileList.length; fi++) {
+        if (fileList[fi].name.endsWith(".xlsx")) files.push(fileList[fi]);
+    }
+    if (files.length === 0) {
+        alert("Please upload at least one valid .xlsx file.");
         return;
     }
 
@@ -183,29 +187,45 @@ function handleFile(file) {
     var globalLoading = document.getElementById("global-loading-overlay");
     if (localLoading) {
         localLoading.style.display = "block";
-        localLoading.querySelector("span").innerText = "Reading Excel file...";
+        localLoading.querySelector("span").innerText = "Reading " + files.length + " Excel file(s)...";
     }
     if (globalLoading) {
         globalLoading.style.display = "flex";
-        globalLoading.querySelector("p").innerText = "Reading Excel file...";
+        globalLoading.querySelector("p").innerText = "Reading " + files.length + " Excel file(s)...";
     }
 
     var isLocal = (window.location.protocol === "file:");
     console.log("Protocol:", window.location.protocol, "| Running", isLocal ? "LOCAL (file://)" : "SERVER", "mode");
 
-    var reader = new FileReader();
-    reader.onload = function (e) {
-        var arrayBuffer = e.target.result;
+    // Read all files into ArrayBuffers first, then process sequentially
+    var arrays = [];
+    var readCount = 0;
 
-        if (!isLocal) {
-            // HTTP/HTTPS mode — try Web Worker with embedded XLSX library
-            tryWorkerParsing(arrayBuffer, localLoading, globalLoading);
-        } else {
-            // file:// mode — XHR is blocked by CORS, use main-thread directly
-            parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
-        }
-    };
-    reader.readAsArrayBuffer(file);
+    for (var fi = 0; fi < files.length; fi++) {
+        (function (file, idx) {
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                arrays[idx] = { name: file.name, buffer: e.target.result };
+                readCount++;
+                if (readCount === files.length) {
+                    // All files read — start processing
+                    if (files.length === 1) {
+                        // Single file: use existing optimized path (Worker if available)
+                        var ab = arrays[0].buffer;
+                        if (!isLocal) {
+                            tryWorkerParsing(ab, localLoading, globalLoading);
+                        } else {
+                            parseMainThreadAsync(ab, localLoading, globalLoading);
+                        }
+                    } else {
+                        // Multiple files: process sequentially on main thread, merge rawData
+                        processMultipleFilesAsync(arrays, localLoading, globalLoading);
+                    }
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        })(files[fi], fi);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -418,6 +438,104 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
     parseNext();
 }
 
+// ---------------------------------------------------------------
+// Multi-file async processor — parses each file and merges rawData
+// ---------------------------------------------------------------
+function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
+    var mergedRawData = {};
+    var idx = 0;
+
+    function parseNextFile() {
+        if (idx >= arrays.length) {
+            // All files parsed — structure and render
+            if (localLoading) localLoading.querySelector("span").innerText = "Structuring merged data...";
+            if (globalLoading) globalLoading.querySelector("p").innerText = "Structuring merged data from " + arrays.length + " files...";
+
+            setTimeout(function () {
+                try {
+                    var result = structureData(mergedRawData, window.appState.layerPatterns, window.appState.primaryEntityPatterns);
+                    var searchIndex = buildSearchIndex(result.structuredData, result.layers);
+
+                    window.appState.rawData = mergedRawData;
+                    window.appState.structuredData = result.structuredData;
+                    window.appState.layers = result.layers;
+                    window.appState.stats = result.stats;
+                    window.appState.searchIndex = searchIndex;
+                    window.appState.mindMapReady = false;
+
+                    updateDashboardUI();
+                } catch (error) {
+                    console.error("Error structuring merged data:", error);
+                    alert("Error structuring merged data: " + error.message);
+                } finally {
+                    finishLoading(localLoading, globalLoading);
+                }
+            }, 50);
+            return;
+        }
+
+        var fileInfo = arrays[idx];
+        var msg = "Parsing " + fileInfo.name + " (" + (idx + 1) + "/" + arrays.length + ")...";
+        if (localLoading) localLoading.querySelector("span").innerText = msg;
+        if (globalLoading) globalLoading.querySelector("p").innerText = msg;
+
+        setTimeout(function () {
+            try {
+                var data = new Uint8Array(fileInfo.buffer);
+                var workbook = XLSX.read(data, { type: "array" });
+
+                workbook.SheetNames.forEach(function (sn) {
+                    var sheet = workbook.Sheets[sn];
+                    var rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+                    if (rawRows.length > 0) {
+                        var headerRowIndex = 0;
+                        for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
+                            var row = rawRows[i];
+                            if (row && row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
+                                headerRowIndex = i;
+                                break;
+                            }
+                        }
+
+                        var headers = rawRows[headerRowIndex].map(function (h) {
+                            return h ? h.toString().trim() : "Column_" + Math.random();
+                        });
+                        var dataRows = [];
+
+                        for (var j = headerRowIndex + 1; j < rawRows.length; j++) {
+                            var rowArr = rawRows[j];
+                            if (!rowArr || rowArr.length === 0 || rowArr.every(function (c) { return c === null || c === ""; })) continue;
+                            var rowObj = {};
+                            headers.forEach(function (header, k) {
+                                rowObj[header] = rowArr[k];
+                            });
+                            dataRows.push(rowObj);
+                        }
+
+                        if (dataRows.length > 0) {
+                            // Avoid sheet name collisions across files
+                            var sheetKey = sn;
+                            if (mergedRawData[sn]) {
+                                var baseName = fileInfo.name.replace(/\.xlsx$/i, '').replace(/[#?&]/g, '_');
+                                sheetKey = sn + " [" + baseName + "]";
+                            }
+                            mergedRawData[sheetKey] = { headers: headers, rows: dataRows };
+                        }
+                    }
+                });
+            } catch (err) {
+                console.error("Error parsing " + fileInfo.name + ":", err);
+            }
+
+            idx++;
+            parseNextFile();
+        }, 30);
+    }
+
+    parseNextFile();
+}
+
 function finishLoading(localLoading, globalLoading) {
     if (localLoading) localLoading.style.display = "none";
     if (globalLoading) globalLoading.style.display = "none";
@@ -452,7 +570,6 @@ function updateDashboardUI() {
         window.appState.cy.destroy();
         window.appState.cy = null;
     }
-
     // If the graph tab is currently active, rebuild immediately
     var graphTab = document.querySelector('.tab-btn[data-target="graph-view"]');
     if (graphTab && graphTab.classList.contains("active") && window.appState.layers.length > 0) {
@@ -462,7 +579,6 @@ function updateDashboardUI() {
         }
         setTimeout(function () {
             if (window.initMindMap) window.initMindMap();
-            window.appState.mindMapReady = true;
         }, 50);
     }
 }
@@ -488,7 +604,6 @@ function setupTabs() {
                     }
                     setTimeout(function () {
                         if (window.initMindMap) window.initMindMap();
-                        window.appState.mindMapReady = true;
                     }, 50);
                 } else if (window.appState.cy) {
                     window.appState.cy.resize();
