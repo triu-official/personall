@@ -194,6 +194,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
         table.className = "data-table";
 
         const originalHeaders = window.appState.rawData[sheetName].headers;
+        const hasIFSC = window.hasIFSCData(sheetName);
 
         const thead = document.createElement("thead");
         const trHead = document.createElement("tr");
@@ -203,10 +204,15 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
             th.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
             trHead.appendChild(th);
         });
-        const thAddr = document.createElement("th");
-        thAddr.innerText = "Bank Branch & Address";
-        thAddr.className = "resolved-address-header";
-        trHead.appendChild(thAddr);
+
+        let thAddr = null;
+        if (hasIFSC) {
+            thAddr = document.createElement("th");
+            thAddr.innerHTML = 'Bank Branch & Address <span class="ifsc-status-badge" style="font-size: 0.8em; font-weight: normal; margin-left: 5px; color: #7f8c8d;"></span>';
+            thAddr.className = "resolved-address-header";
+            trHead.appendChild(thAddr);
+        }
+
         thead.appendChild(trHead);
         table.appendChild(thead);
 
@@ -238,31 +244,106 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
             const end = start + ROWS_PER_PAGE;
             const pageRows = table.filteredRows.slice(start, end);
 
+            let ifscCellsToUpdate = [];
+
             for (let r = 0; r < pageRows.length; r++) {
                 const row = pageRows[r];
                 const tr = document.createElement("tr");
                 originalHeaders.forEach(col => {
                     const td = document.createElement("td");
-                    td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
+                    // Apply global formatting logic to amounts
+                    if (col.toLowerCase().includes("amount") && typeof row[col] !== 'undefined') {
+                        td.innerText = window.formatAmount ? window.formatAmount(row[col]) : (row[col] !== null ? row[col] : "—");
+                    } else {
+                        td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
+                    }
                     td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
                     tr.appendChild(td);
                 });
 
-                const tdAddr = document.createElement("td");
-                tdAddr.className = "resolved-address-cell";
-                const ifscVal = window.getRowIFSC(sheetName, row);
-                if (ifscVal) {
-                    tdAddr.innerText = "Loading address...";
-                    window.lookupIFSC(ifscVal, function(details) {
-                        tdAddr.innerText = details.address;
-                    });
-                } else {
-                    tdAddr.innerText = "-";
+                if (hasIFSC) {
+                    const tdAddr = document.createElement("td");
+                    tdAddr.className = "resolved-address-cell";
+                    const ifscData = window.getRowIFSC(sheetName, row);
+
+                    if (ifscData) {
+                        const clean = String(ifscData.code).trim().toUpperCase();
+                        const cached = window.ifscCache && window.ifscCache[clean];
+
+                        let addressHtml = "";
+                        if (cached && cached.status === 'resolved') {
+                            addressHtml = cached.address;
+                        } else if (cached && cached.status === 'fallback') {
+                            addressHtml = cached.address + ' <button class="retry-ifsc-btn" data-ifsc="'+clean+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+                        } else {
+                            addressHtml = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
+                            ifscCellsToUpdate.push({ td: tdAddr, ifsc: clean, source: ifscData.source });
+                        }
+
+                        if (ifscData.source === 'sheet_metadata') {
+                            addressHtml += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
+                        }
+                        tdAddr.innerHTML = addressHtml;
+                        tdAddr.dataset.source = ifscData.source;
+                    } else {
+                        tdAddr.innerText = "-";
+                    }
+                    tr.appendChild(tdAddr);
                 }
-                tr.appendChild(tdAddr);
 
                 tbody.appendChild(tr);
             }
+
+            // Attach retry handlers
+            if (hasIFSC) {
+                const retryBtns = tbody.querySelectorAll('.retry-ifsc-btn');
+                retryBtns.forEach(btn => {
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        const code = this.dataset.ifsc;
+                        this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
+                        // Delete fallback from cache to force network call
+                        if (window.ifscCache && window.ifscCache[code]) {
+                            delete window.ifscCache[code];
+                        }
+                        window.lookupIFSC(code, function(details) {
+                            // Re-render page to show new value
+                            table.renderPage();
+                        });
+                    });
+                });
+            }
+
+            // Trigger resolution for cells that need it (if any were not already cached or falling back)
+            ifscCellsToUpdate.forEach(item => {
+                window.lookupIFSC(item.ifsc, function(details) {
+                    // Update cell if still in DOM
+                    if (document.body.contains(item.td)) {
+                        let html = details.address;
+                        if (details.status === 'fallback') {
+                            html += ' <button class="retry-ifsc-btn" data-ifsc="'+item.ifsc+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+                        }
+                        if (item.source === 'sheet_metadata') {
+                            html += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
+                        }
+                        item.td.innerHTML = html;
+
+                        if (details.status === 'fallback') {
+                            // Attach event to this specific dynamically added button
+                            const retryBtn = item.td.querySelector('.retry-ifsc-btn');
+                            if (retryBtn) {
+                                retryBtn.addEventListener('click', function(e) {
+                                    e.preventDefault();
+                                    const code = this.dataset.ifsc;
+                                    this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
+                                    if (window.ifscCache && window.ifscCache[code]) delete window.ifscCache[code];
+                                    window.lookupIFSC(code, function() { table.renderPage(); });
+                                });
+                            }
+                        }
+                    }
+                });
+            });
 
             setupPrimaryEntityToggle(true);
 

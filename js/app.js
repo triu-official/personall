@@ -21,6 +21,20 @@ document.addEventListener("DOMContentLoaded", function () {
     setupTabs();
 });
 
+window.formatAmount = function(value) {
+    const num = Number(value);
+    if (value === null || value === undefined || value === '' || isNaN(num)) return '—';
+    const isNegative = num < 0;
+    const abs = Math.abs(num);
+    let formatted;
+    if (abs === 0) formatted = '0.00';
+    else if (abs >= 10000000) formatted = (abs / 10000000).toFixed(2) + ' Cr';
+    else if (abs >= 100000) formatted = (abs / 100000).toFixed(2) + ' L';
+    else if (abs >= 1000) formatted = (abs / 1000).toFixed(2) + ' K';
+    else formatted = abs.toFixed(2);
+    return (isNegative ? '-' : '') + formatted;
+};
+
 function setupDragAndDrop() {
     var dropZone = document.getElementById("drop-zone");
     var fileInput = document.getElementById("file-input");
@@ -590,15 +604,113 @@ function updateDashboardUI() {
     document.getElementById("stat-entities").innerText = window.appState.stats.entities;
     document.getElementById("stat-txns").innerText = window.appState.stats.transactions;
 
-    var formatter = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     var totalAmt = window.appState.stats.totalAmount;
-    var suffix = "";
-    if (totalAmt >= 10000000) {
-        suffix = " (" + (totalAmt / 10000000).toFixed(2) + " Cr)";
-    } else if (totalAmt >= 100000) {
-        suffix = " (" + (totalAmt / 100000).toFixed(2) + " Lk)";
+    // Use the new shared formatter to keep amounts consistent across dashboard, graph, and export
+    document.getElementById("stat-amount").innerText = window.formatAmount ? window.formatAmount(totalAmt) : totalAmt;
+
+    // --- DIAGNOSTICS & BULK RESOLUTION ---
+    var diagnosticReport = {
+        sheets: [],
+        uniqueIFSCs: new Set(),
+        resolutions: { api: 0, cache: 0, fallback: 0, failed: 0 },
+        unclassifiedRows: 0
+    };
+
+    var rawData = window.appState.rawData;
+    Object.keys(rawData).forEach(function(sheetName) {
+        var sheetData = rawData[sheetName];
+        var rows = sheetData.rows || [];
+        var headers = sheetData.headers || [];
+
+        // Check columns
+        var layerCol = getColumnNameByPattern(headers, window.appState.layerPatterns);
+        var entityCol = getColumnNameByPattern(headers, window.appState.primaryEntityPatterns);
+
+        var ifscFound = false;
+        var ifscSource = 'none';
+
+        // Check sheet metadata for IFSC
+        if (window.appState.sheetIFSC && window.appState.sheetIFSC[sheetName]) {
+            ifscFound = true;
+            ifscSource = 'sheet_metadata';
+        } else {
+            // Check headers
+            var hasHeader = headers.some(function(h) {
+                var hl = h.toLowerCase().replace(/[\s_\-\/]/g, "");
+                return hl.includes("ifsc") || hl.includes("ifs") || hl.includes("branchcode") || hl.includes("solid");
+            });
+            if (hasHeader) {
+                ifscFound = true;
+                ifscSource = 'header_col';
+            } else {
+                // Check sample values
+                var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
+                for (var i = 0; i < Math.min(rows.length, 100); i++) {
+                    for (var h of headers) {
+                        var val = String(rows[i][h] || "");
+                        if (ifscRegex.test(val)) {
+                            ifscFound = true;
+                            ifscSource = 'row_cell';
+                            break;
+                        }
+                    }
+                    if (ifscFound) break;
+                }
+            }
+        }
+
+        // Add to report
+        diagnosticReport.sheets.push({
+            name: sheetName,
+            totalRows: rows.length,
+            layerDetected: !!layerCol,
+            entityDetected: !!entityCol,
+            ifscDetected: ifscFound,
+            ifscSource: ifscSource,
+            virtualColumnShown: window.hasIFSCData ? window.hasIFSCData(sheetName) : ifscFound
+        });
+
+        // Collect unique IFSC codes across all rows using the global getter
+        rows.forEach(function(row) {
+            // Unclassified rows stat
+            if (!layerCol || !entityCol) {
+                diagnosticReport.unclassifiedRows++;
+            }
+
+            if (window.getRowIFSC) {
+                var ifscData = window.getRowIFSC(sheetName, row);
+                if (ifscData && ifscData.code) {
+                    diagnosticReport.uniqueIFSCs.add(String(ifscData.code).trim().toUpperCase());
+                }
+            }
+        });
+    });
+
+    // Start background bulk resolution for extracted unique codes
+    if (window.startBulkIFSCResolution && diagnosticReport.uniqueIFSCs.size > 0) {
+        window.startBulkIFSCResolution(diagnosticReport.uniqueIFSCs, function() {
+            // Resolution complete. Tally stats based on cache.
+            var cache = window.ifscCache || {};
+            diagnosticReport.uniqueIFSCs.forEach(function(code) {
+                var item = cache[code];
+                if (!item) {
+                    diagnosticReport.resolutions.failed++;
+                } else if (item.status === 'resolved') {
+                    // It's impossible to distinguish whether it came from cache OR api in this pass
+                    // without keeping complex state, so we mark successful as cache/api mix
+                    diagnosticReport.resolutions.cache++;
+                } else if (item.status === 'fallback') {
+                    diagnosticReport.resolutions.fallback++;
+                } else {
+                    diagnosticReport.resolutions.failed++;
+                }
+            });
+            console.log("--- WORKBOOK DIAGNOSTIC REPORT ---", diagnosticReport);
+        });
+    } else {
+        console.log("--- WORKBOOK DIAGNOSTIC REPORT ---", diagnosticReport);
     }
-    document.getElementById("stat-amount").innerText = formatter.format(totalAmt) + suffix;
+    // --- END DIAGNOSTICS ---
 
     if (window.renderSidebarAndTables) {
         window.renderSidebarAndTables();
