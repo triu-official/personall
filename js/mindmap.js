@@ -97,18 +97,21 @@ window.initMindMap = function() {
                 style: {
                     'background-color': '#c0392b',
                     'label': 'data(label)',
-                    'color': '#ffffff',
+                    'color': '#333333',
                     'font-size': '11px',
                     'font-weight': 'bold',
-                    'text-valign': 'center',
+                    'text-valign': 'bottom',
                     'text-halign': 'center',
-                    'text-outline-color': '#c0392b',
-                    'text-outline-width': 1.5,
-                    'width': 35,
-                    'height': 35,
+                    'text-margin-y': '5px',
+                    'text-outline-color': '#ffffff',
+                    'text-outline-width': 2,
+                    'width': 25,
+                    'height': 25,
                     'shape': 'diamond',
                     'border-width': 3,
-                    'border-color': '#962d22'
+                    'border-color': '#962d22',
+                    'text-wrap': 'wrap',
+                    'text-max-width': '100px'
                 }
             },
             {
@@ -573,25 +576,16 @@ function getLayoutOptions(isSwimlane) {
     }
 }
 
+// Delegated to global app.js for consistency
 function formatAmount(val) {
-    if (!val) return "";
-    var num = parseFloat(String(val).replace(/,/g, ''));
-    if (isNaN(num)) return val;
-
-    if (num >= 10000000) return (num / 10000000).toFixed(2) + ' Cr';
-    if (num >= 100000) return (num / 100000).toFixed(2) + ' L';
-    if (num >= 1000) return (num / 1000).toFixed(1) + ' K';
-    return num.toFixed(2);
+    if (window.formatAmount) return window.formatAmount(val);
+    return val;
 }
 
 function getShortLabel(sheetName) {
-    var lower = sheetName.toLowerCase();
-    if (lower.indexOf("atm") !== -1) return "ATM";
-    if (lower.indexOf("pos") !== -1) return "POS";
-    if (lower.indexOf("cheque") !== -1) return "CHQ";
-    if (lower.indexOf("aeps") !== -1) return "AEPS";
-    if (lower.indexOf("hold") !== -1) return "HOLD";
-    return "TXN";
+    // Return the actual sheet name directly to ensure all information is reflected.
+    // E.g. "Withdrawal through ATM", "Cash Withdrawal through Cheque", "Others Less Than 500"
+    return sheetName;
 }
 
 document.addEventListener("DOMContentLoaded", function () {
