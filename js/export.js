@@ -105,8 +105,9 @@ async function generateWordDocument() {
                 const rows = rawData[sheetName].rows || [];
                 rows.forEach(row => {
                     const ifscVal = window.getRowIFSC(sheetName, row);
-                    if (ifscVal && (!window.ifscCache || !window.ifscCache[ifscVal])) {
-                        ifscSet.add(ifscVal);
+                    const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                    if (code && (!window.ifscCache || !window.ifscCache[code])) {
+                        ifscSet.add(code);
                     }
                 });
             });
@@ -223,7 +224,12 @@ async function buildDocxObject() {
                         let cellText = "";
                         if (header === "Bank Branch & Address") {
                             const ifscVal = window.getRowIFSC(sheetName, rowObj);
-                            cellText = window.getIFSCCachedSync(ifscVal).address;
+                            const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                            if (code) {
+                                cellText = window.getIFSCCachedSync(code).address;
+                            } else {
+                                cellText = "—";
+                            }
                         } else {
                             cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
                         }
@@ -274,9 +280,10 @@ async function buildDocxObject() {
                         children: headers.map(header => {
                             let cellText = "";
                             if (header === "Bank Branch & Address") {
-                                const ifscData = window.getRowIFSC(sheetName, rowObj);
-                                if (ifscData) {
-                                    const cached = window.getIFSCCachedSync(ifscData.code);
+                                const ifscVal = window.getRowIFSC(sheetName, rowObj);
+                                const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                                if (code) {
+                                    const cached = window.getIFSCCachedSync(code);
                                     cellText = cached.address;
                                     if (cached.status === 'fallback') {
                                         cellText = "Address unavailable — offline lookup failed (" + cached.bank + ")";
@@ -285,7 +292,7 @@ async function buildDocxObject() {
                                     cellText = "-";
                                 }
                             } else if (header.toLowerCase().includes("amount") && typeof rowObj[header] !== 'undefined') {
-                                cellText = window.formatAmount ? window.formatAmount(rowObj[header]) : String(rowObj[header] !== null ? rowObj[header] : "—");
+                                cellText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(rowObj[header]) : String(rowObj[header] !== null ? rowObj[header] : "—");
                             } else {
                                 cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
                             }

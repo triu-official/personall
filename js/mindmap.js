@@ -443,7 +443,7 @@ function generateGraphElements(aggregateMode) {
                                         source: cleanEntityId,
                                         target: receiverId,
                                         type: 'money_transfer',
-                                        amount: formatAmount(amountNum)
+                                        amount: localFormatAmount(amountNum)
                                     }
                                 });
                             }
@@ -480,7 +480,7 @@ function generateGraphElements(aggregateMode) {
                                     source: cleanEntityId,
                                     target: termId,
                                     type: 'terminal_flow',
-                                    amount: formatAmount(amountNum)
+                                    amount: localFormatAmount(amountNum)
                                 }
                             });
                         }
@@ -510,7 +510,7 @@ function generateGraphElements(aggregateMode) {
                     source: data.source,
                     target: data.target,
                     type: 'money_transfer',
-                    amount: formatAmount(data.amountSum) + " (" + data.count + " txns)"
+                    amount: localFormatAmount(data.amountSum) + " (" + data.count + " txns)"
                 }
             });
         }
@@ -538,7 +538,7 @@ function generateGraphElements(aggregateMode) {
                     source: data.source,
                     target: termNodeId,
                     type: 'terminal_flow',
-                    amount: formatAmount(data.amountSum) + " (" + data.count + " txns)"
+                    amount: localFormatAmount(data.amountSum) + " (" + data.count + " txns)"
                 }
             });
         }
@@ -576,9 +576,9 @@ function getLayoutOptions(isSwimlane) {
     }
 }
 
-// Delegated to global app.js for consistency
-function formatAmount(val) {
-    if (window.formatAmount) return window.formatAmount(val);
+// Delegated to global app.js for consistency via localFormatAmount to avoid global collisions
+function localFormatAmount(val) {
+    if (window.personallFormatters && window.personallFormatters.amount) return window.personallFormatters.amount(val);
     return val;
 }
 

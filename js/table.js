@@ -253,7 +253,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                     const td = document.createElement("td");
                     // Apply global formatting logic to amounts
                     if (col.toLowerCase().includes("amount") && typeof row[col] !== 'undefined') {
-                        td.innerText = window.formatAmount ? window.formatAmount(row[col]) : (row[col] !== null ? row[col] : "—");
+                        td.innerText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(row[col]) : (row[col] !== null ? row[col] : "—");
                     } else {
                         td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
                     }
@@ -264,23 +264,24 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                 if (hasIFSC) {
                     const tdAddr = document.createElement("td");
                     tdAddr.className = "resolved-address-cell";
-                    const ifscData = window.getRowIFSC(sheetName, row);
+                    const ifscVal = window.getRowIFSC(sheetName, row);
+                    const clean = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
 
-                    if (ifscData) {
-                        const clean = String(ifscData.code).trim().toUpperCase();
-                        const cached = window.ifscCache && window.ifscCache[clean];
+                    if (clean) {
+                        const cleanUpper = String(clean).trim().toUpperCase();
+                        const cached = window.ifscCache && window.ifscCache[cleanUpper];
 
                         let addressHtml = "";
                         if (cached && cached.status === 'resolved') {
                             addressHtml = cached.address;
                         } else if (cached && cached.status === 'fallback') {
-                            addressHtml = cached.address + ' <button class="retry-ifsc-btn" data-ifsc="'+clean+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+                            addressHtml = cached.address + ' <button class="retry-ifsc-btn" data-ifsc="'+cleanUpper+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
                         } else {
                             addressHtml = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                            ifscCellsToUpdate.push({ td: tdAddr, ifsc: clean, source: ifscData.source });
+                            ifscCellsToUpdate.push({ td: tdAddr, ifsc: cleanUpper, source: ifscVal.source || 'row_cell' });
                         }
 
-                        if (ifscData.source === 'sheet_metadata') {
+                        if (ifscVal && ifscVal.source === 'sheet_metadata') {
                             addressHtml += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
                         }
                         tdAddr.innerHTML = addressHtml;

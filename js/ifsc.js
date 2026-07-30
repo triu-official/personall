@@ -291,6 +291,17 @@ window.getRowIFSC = function(sheetName, rowObj) {
     return null;
 };
 
+window.safeExtractIFSC = function(val) {
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'string') return val;
+    if (typeof val === 'object' && val.code) return val.code;
+    if (!window.safeExtractIFSC._loggedWarning) {
+        console.warn("safeExtractIFSC: ignored invalid IFSC format", val);
+        window.safeExtractIFSC._loggedWarning = true;
+    }
+    return null;
+};
+
 // Bulk resolution system
 window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
     ifscSet = Array.from(ifscSet).filter(function(code) {

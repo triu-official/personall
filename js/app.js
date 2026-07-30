@@ -21,19 +21,23 @@ document.addEventListener("DOMContentLoaded", function () {
     setupTabs();
 });
 
-window.formatAmount = function(value) {
-    const num = Number(value);
-    if (value === null || value === undefined || value === '' || isNaN(num)) return '—';
-    const isNegative = num < 0;
-    const abs = Math.abs(num);
-    let formatted;
-    if (abs === 0) formatted = '0.00';
-    else if (abs >= 10000000) formatted = (abs / 10000000).toFixed(2) + ' Cr';
-    else if (abs >= 100000) formatted = (abs / 100000).toFixed(2) + ' L';
-    else if (abs >= 1000) formatted = (abs / 1000).toFixed(2) + ' K';
-    else formatted = abs.toFixed(2);
-    return (isNegative ? '-' : '') + formatted;
+window.personallFormatters = {
+    amount: function(value) {
+        const num = Number(value);
+        if (value === null || value === undefined || value === '' || isNaN(num)) return '—';
+        const isNegative = num < 0;
+        const abs = Math.abs(num);
+        let formatted;
+        if (abs === 0) formatted = '0.00';
+        else if (abs >= 10000000) formatted = (abs / 10000000).toFixed(2) + ' Cr';
+        else if (abs >= 100000) formatted = (abs / 100000).toFixed(2) + ' L';
+        else if (abs >= 1000) formatted = (abs / 1000).toFixed(2) + ' K';
+        else formatted = abs.toFixed(2);
+        return (isNegative ? '-' : '') + formatted;
+    }
 };
+
+window.formatAmount = window.personallFormatters.amount;
 
 function setupDragAndDrop() {
     var dropZone = document.getElementById("drop-zone");
@@ -606,7 +610,7 @@ function updateDashboardUI() {
 
     var totalAmt = window.appState.stats.totalAmount;
     // Use the new shared formatter to keep amounts consistent across dashboard, graph, and export
-    document.getElementById("stat-amount").innerText = window.formatAmount ? window.formatAmount(totalAmt) : totalAmt;
+    document.getElementById("stat-amount").innerText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(totalAmt) : totalAmt;
 
     // --- DIAGNOSTICS & BULK RESOLUTION ---
     var diagnosticReport = {
@@ -678,9 +682,10 @@ function updateDashboardUI() {
             }
 
             if (window.getRowIFSC) {
-                var ifscData = window.getRowIFSC(sheetName, row);
-                if (ifscData && ifscData.code) {
-                    diagnosticReport.uniqueIFSCs.add(String(ifscData.code).trim().toUpperCase());
+                var ifscVal = window.getRowIFSC(sheetName, row);
+                var code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                if (code) {
+                    diagnosticReport.uniqueIFSCs.add(String(code).trim().toUpperCase());
                 }
             }
         });
