@@ -274,8 +274,18 @@ async function buildDocxObject() {
                         children: headers.map(header => {
                             let cellText = "";
                             if (header === "Bank Branch & Address") {
-                                const ifscVal = window.getRowIFSC(sheetName, rowObj);
-                                cellText = window.getIFSCCachedSync(ifscVal).address;
+                                const ifscData = window.getRowIFSC(sheetName, rowObj);
+                                if (ifscData) {
+                                    const cached = window.getIFSCCachedSync(ifscData.code);
+                                    cellText = cached.address;
+                                    if (cached.status === 'fallback') {
+                                        cellText = "Address unavailable — offline lookup failed (" + cached.bank + ")";
+                                    }
+                                } else {
+                                    cellText = "-";
+                                }
+                            } else if (header.toLowerCase().includes("amount") && typeof rowObj[header] !== 'undefined') {
+                                cellText = window.formatAmount ? window.formatAmount(rowObj[header]) : String(rowObj[header] !== null ? rowObj[header] : "—");
                             } else {
                                 cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
                             }
@@ -624,9 +634,24 @@ function renderExportModal() {
         else hasClassified = true;
 
         const displayedHeaders = [].concat(headers);
-        displayedHeaders.push("Bank Branch & Address");
+        const hasIFSC = window.hasIFSCData(sheetName);
+        if (hasIFSC) {
+            displayedHeaders.push("Bank Branch & Address");
+        }
 
         const groupDiv = createSheetGroup(sheetName, displayedHeaders, rows, isUnclassified);
+
+        // Add cache status note if this sheet has IFSC
+        if (hasIFSC) {
+            const note = document.createElement("div");
+            note.style.fontSize = "12px";
+            note.style.color = "#7f8c8d";
+            note.style.marginTop = "5px";
+            note.className = "ifsc-export-note";
+            note.innerText = "Includes address cache";
+            groupDiv.querySelector('.export-sheet-header').appendChild(note);
+        }
+
         container.appendChild(groupDiv);
     });
 
