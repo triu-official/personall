@@ -16,10 +16,55 @@ window.appState = {
     sheetIFSC: {}
 };
 
+window.personallEnv = {};
+
+function loadEnv(callback) {
+    fetch('.env')
+        .then(function (res) {
+            if (!res.ok) throw new Error("Could not fetch .env (status " + res.status + ")");
+            return res.text();
+        })
+        .then(function (text) {
+            var env = {};
+            var lines = text.split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line || line.indexOf('#') === 0) continue;
+                var eqIdx = line.indexOf('=');
+                if (eqIdx > 0) {
+                    var key = line.substring(0, eqIdx).trim();
+                    var val = line.substring(eqIdx + 1).trim();
+                    if ((val.indexOf('"') === 0 && val.lastIndexOf('"') === val.length - 1) ||
+                        (val.indexOf("'") === 0 && val.lastIndexOf("'") === val.length - 1)) {
+                        val = val.substring(1, val.length - 1);
+                    }
+                    env[key] = val;
+                }
+            }
+            window.personallEnv = env;
+            // Merge into APP_CONFIG
+            window.APP_CONFIG = window.APP_CONFIG || {};
+            for (var k in env) {
+                if (env.hasOwnProperty(k)) {
+                    window.APP_CONFIG[k] = env[k];
+                }
+            }
+            console.log("Environment variables loaded successfully from .env file:", Object.keys(env));
+            if (callback) callback();
+        })
+        .catch(function (err) {
+            console.log("Notice: .env file loading skipped or failed (normal in file:// mode or if .env is not present):", err.message);
+            if (callback) callback();
+        });
+}
+
 document.addEventListener("DOMContentLoaded", function () {
-    setupDragAndDrop();
-    setupTabs();
+    loadEnv(function () {
+        setupDragAndDrop();
+        setupTabs();
+    });
 });
+
 
 window.personallFormatters = {
     amount: function(value) {
@@ -691,18 +736,58 @@ function updateDashboardUI() {
         });
     });
 
-    // Start background bulk resolution for extracted unique codes
-    if (window.startBulkIFSCResolution && diagnosticReport.uniqueIFSCs.size > 0) {
-        window.startBulkIFSCResolution(diagnosticReport.uniqueIFSCs, function() {
+    // Build layer-priority ordered IFSC list grouped by layer.
+    // This allows us to perform bulk resolution layer-by-layer sequentially.
+    var layerGroups = []; // Array of { layerKey: string, ifscs: Array }
+    var seenIFSCGlobal = {};
+    var layers = window.appState.layers || [];
+    var structured = window.appState.structuredData || {};
+    
+    for (var lii = 0; lii < layers.length; lii++) {
+        var lk = layers[lii];
+        var entities = structured[lk];
+        if (!entities) continue;
+        var layerIFSCs = [];
+        var enames = Object.keys(entities);
+        for (var ei = 0; ei < enames.length; ei++) {
+            var sheets = entities[enames[ei]];
+            if (!sheets) continue;
+            var snames = Object.keys(sheets);
+            for (var si = 0; si < snames.length; si++) {
+                var rows = sheets[snames[si]];
+                if (!rows) continue;
+                for (var ri = 0; ri < rows.length; ri++) {
+                    if (window.getRowIFSC) {
+                        var ifscVal = window.getRowIFSC(snames[si], rows[ri]);
+                        var code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                        if (code) {
+                            var c = String(code).trim().toUpperCase();
+                            if (!seenIFSCGlobal[c]) {
+                                seenIFSCGlobal[c] = true;
+                                layerIFSCs.push(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (layerIFSCs.length > 0) {
+            layerGroups.push({ layerKey: lk, ifscs: layerIFSCs });
+        }
+    }
+
+    // Sequentially resolve layer-by-layer
+    var groupIndex = 0;
+    function resolveNextLayerGroup() {
+        if (groupIndex >= layerGroups.length) {
             // Resolution complete. Tally stats based on cache.
             var cache = window.ifscCache || {};
-            diagnosticReport.uniqueIFSCs.forEach(function(code) {
+            var allCodes = Object.keys(seenIFSCGlobal);
+            allCodes.forEach(function(code) {
                 var item = cache[code];
                 if (!item) {
                     diagnosticReport.resolutions.failed++;
                 } else if (item.status === 'resolved') {
-                    // It's impossible to distinguish whether it came from cache OR api in this pass
-                    // without keeping complex state, so we mark successful as cache/api mix
                     diagnosticReport.resolutions.cache++;
                 } else if (item.status === 'fallback') {
                     diagnosticReport.resolutions.fallback++;
@@ -711,10 +796,30 @@ function updateDashboardUI() {
                 }
             });
             console.log("--- WORKBOOK DIAGNOSTIC REPORT ---", diagnosticReport);
-        });
+            return;
+        }
+
+        var group = layerGroups[groupIndex];
+        console.log("Starting bulk IFSC resolution for: " + group.layerKey + " (" + group.ifscs.length + " unique codes)");
+        
+        if (window.startBulkIFSCResolution && group.ifscs.length > 0) {
+            window.startBulkIFSCResolution(group.ifscs, function() {
+                console.log("Completed bulk IFSC resolution for: " + group.layerKey);
+                groupIndex++;
+                resolveNextLayerGroup();
+            });
+        } else {
+            groupIndex++;
+            resolveNextLayerGroup();
+        }
+    }
+
+    if (layerGroups.length > 0) {
+        resolveNextLayerGroup();
     } else {
         console.log("--- WORKBOOK DIAGNOSTIC REPORT ---", diagnosticReport);
     }
+
     // --- END DIAGNOSTICS ---
 
     if (window.renderSidebarAndTables) {

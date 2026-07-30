@@ -3,6 +3,7 @@ window.ifscCache = JSON.parse(localStorage.getItem('personall_ifsc_cache') || '{
 window.ifscApiBlocked = false;
 window.ifscBulkQueue = [];
 window.ifscBulkInProgress = false;
+window.ifscCallbackQueue = {}; // { IFSC: [callback, ...] } for pending lookups
 
 window.getBankNameFromIFSC = function(ifsc) {
     if (!ifsc || ifsc.length < 4) return "Unknown Bank";
@@ -85,8 +86,18 @@ window.testIfscApi = function() {
 
     var apiUrl = (window.APP_CONFIG && window.APP_CONFIG.RAZORPAY_IFSC_API_URL) ? window.APP_CONFIG.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
 
+    var fetchOptions = {};
+    var apiKey = (window.APP_CONFIG && (window.APP_CONFIG.IFSC_API_KEY || window.APP_CONFIG.RAZORPAY_IFSC_API_KEY));
+    if (apiKey) {
+        fetchOptions.headers = {
+            "Authorization": "Bearer " + apiKey,
+            "X-API-Key": apiKey
+        };
+    }
+
     // Use HDFC0000001 as the known-valid code for the CORS/Network test
-    return fetch(apiUrl + "HDFC0000001")
+    return fetch(apiUrl + "HDFC0000001", fetchOptions)
+
         .then(function(res) {
             if (res.ok) {
                 window.ifscApiBlocked = false;
@@ -154,19 +165,29 @@ window.lookupIFSC = function(ifscCode, callback) {
 
     // Check if there's already a pending request for this IFSC
     if (window.ifscCache[clean] && window.ifscCache[clean].status === "pending") {
-         // It's pending, but we are a direct caller.
-         // In a robust system, we would add the callback to a queue for this specific IFSC.
-         // For simplicity and avoiding memory leaks with many closures, if it's pending,
-         // we just return a temporary fallback and let the UI refresh or rely on the caller to retry.
-         callback({ address: "Looking up...", bank: fallbackBank, branch: "", status: "pending" });
-         return;
+        // Queue the callback — it will be called when the fetch completes
+        if (!window.ifscCallbackQueue[clean]) {
+            window.ifscCallbackQueue[clean] = [];
+        }
+        window.ifscCallbackQueue[clean].push(callback);
+        return;
     }
 
     window.ifscCache[clean] = { status: "pending" };
 
     var apiUrl = (window.APP_CONFIG && window.APP_CONFIG.RAZORPAY_IFSC_API_URL) ? window.APP_CONFIG.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
 
-    fetch(apiUrl + clean)
+    var fetchOptions = {};
+    var apiKey = (window.APP_CONFIG && (window.APP_CONFIG.IFSC_API_KEY || window.APP_CONFIG.RAZORPAY_IFSC_API_KEY));
+    if (apiKey) {
+        fetchOptions.headers = {
+            "Authorization": "Bearer " + apiKey,
+            "X-API-Key": apiKey
+        };
+    }
+
+    fetch(apiUrl + clean, fetchOptions)
+
         .then(function(response) {
             if (!response.ok) {
                 throw new Error("IFSC Lookup Failed");
@@ -202,13 +223,27 @@ window.lookupIFSC = function(ifscCode, callback) {
 
             window.ifscCache[clean] = result;
             saveCacheSafe();
+            // Call the primary callback
             callback(result);
+            // Call any queued callbacks
+            firePendingCallbacks(clean, result);
         })
         .catch(function(err) {
             // Save fallback to cache temporarily to prevent repeat calls during this session
             window.ifscCache[clean] = fallbackData;
             callback(fallbackData);
+            firePendingCallbacks(clean, fallbackData);
         });
+
+    function firePendingCallbacks(code, result) {
+        var q = window.ifscCallbackQueue[code];
+        if (q) {
+            delete window.ifscCallbackQueue[code];
+            for (var i = 0; i < q.length; i++) {
+                q[i](result);
+            }
+        }
+    }
 };
 
 
@@ -302,14 +337,16 @@ window.safeExtractIFSC = function(val) {
     return null;
 };
 
-// Bulk resolution system
-window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
-    ifscSet = Array.from(ifscSet).filter(function(code) {
+// Bulk resolution system — accepts either a Set or an ordered Array
+// When an Array is passed, the order is preserved (layer priority).
+window.startBulkIFSCResolution = function(ifscInput, onComplete, onProgress) {
+    var ifscList = (ifscInput instanceof Array) ? ifscInput.slice() : Array.from(ifscInput);
+    ifscList = ifscList.filter(function(code) {
         var clean = String(code).trim().toUpperCase();
         return !window.ifscCache[clean] || (window.ifscCache[clean].status !== 'resolved' && window.ifscCache[clean].status !== 'fallback');
     });
 
-    if (ifscSet.length === 0) {
+    if (ifscList.length === 0) {
         if (onComplete) onComplete();
         return;
     }
@@ -317,7 +354,7 @@ window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
     window.testIfscApi().then(function(isOk) {
         if (!isOk) {
             // API blocked, quickly mark all as fallback
-            ifscSet.forEach(function(code) {
+            ifscList.forEach(function(code) {
                 var clean = String(code).trim().toUpperCase();
                 var fb = window.getBankNameFromIFSC(clean);
                 window.ifscCache[clean] = {
@@ -332,12 +369,11 @@ window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
             return;
         }
 
-        // Process queue with concurrency
-        // We use a Set in app.js, so ifscSet is already deduplicated, but we ensure it here implicitly by treating array
-        var queue = ifscSet.slice();
+        // Process queue in order — earlier items in the array get resolved first
+        var queue = ifscList.slice();
         var total = queue.length;
         var completed = 0;
-        var concurrency = 3; // Limit to 3 concurrent requests
+        var concurrency = 2; // Reduced to 2 so earlier layers finish before later ones start
         var active = 0;
 
         function processNext() {
@@ -350,7 +386,6 @@ window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
                 var code = queue.shift();
                 active++;
 
-                // Add a small delay between requests to avoid rate limits (150-250ms)
                 setTimeout((function(c) {
                     return function() {
                         window.lookupIFSC(c, function(res) {
@@ -359,12 +394,11 @@ window.startBulkIFSCResolution = function(ifscSet, onComplete, onProgress) {
                             if (onProgress) onProgress(completed, total);
                             processNext();
 
-                            // Emit a custom event so UI elements can update themselves
                             var event = new CustomEvent('ifsc-resolved', { detail: { code: c, result: res } });
                             document.dispatchEvent(event);
                         });
                     };
-                })(code), 200); // 200ms delay between firings in this active slot
+                })(code), 200);
             }
         }
 

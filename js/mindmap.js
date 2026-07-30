@@ -182,7 +182,7 @@ window.initMindMap = function() {
             elements: elements,
             style: dynamicStyle,
             layout: getLayoutOptions(document.getElementById("toggle-layout") ? document.getElementById("toggle-layout").checked : false),
-            minZoom: 0.1,
+            minZoom: 0.0005,
             maxZoom: 5,
             wheelSensitivity: 0.5
         });
@@ -310,6 +310,70 @@ function generateGraphElements(aggregateMode) {
     var addedNodes = {};
     var terminalNodeIdCounter = 0;
 
+    // Pre-compute per-sheet column info to avoid re-scanning headers for every row
+    var sheetColInfo = {};
+
+    function getColInfo(sheetName, sampleRow) {
+        if (sheetColInfo[sheetName]) return sheetColInfo[sheetName];
+        var rowKeys = sampleRow ? Object.keys(sampleRow) : [];
+        var info = {
+            isMoneyTransfer: isSheetMoneyTransfer(sheetName, sampleRow),
+            entityCol: null,
+            amountCol: null,
+            receiverCol: null,
+            patterns: window.appState.primaryEntityPatterns || []
+        };
+        // Find entity column
+        for (var i = 0; i < rowKeys.length; i++) {
+            var kl = rowKeys[i].toLowerCase();
+            for (var p = 0; p < info.patterns.length; p++) {
+                if (kl.indexOf(info.patterns[p]) !== -1) {
+                    info.entityCol = rowKeys[i];
+                    break;
+                }
+            }
+            if (info.entityCol) break;
+        }
+        // Find amount column
+        for (var i = 0; i < rowKeys.length; i++) {
+            if (rowKeys[i].toLowerCase().indexOf("amount") !== -1) {
+                info.amountCol = rowKeys[i];
+                break;
+            }
+        }
+        // Find receiver column (only for money transfer sheets)
+        if (info.isMoneyTransfer) {
+            for (var i = 0; i < rowKeys.length; i++) {
+                var kl = rowKeys[i].toLowerCase();
+                if (rowKeys[i] === info.entityCol) continue;
+                if (kl.indexOf("to account") !== -1 || 
+                    kl.indexOf("beneficiary") !== -1 || 
+                    kl.indexOf("receiver") !== -1 || 
+                    kl.indexOf("transferred to") !== -1 || 
+                    kl.indexOf("destination") !== -1 ||
+                    kl === "account no" ||
+                    kl === "to_account" ||
+                    kl === "toacc") {
+                    info.receiverCol = rowKeys[i];
+                    break;
+                }
+            }
+        }
+        sheetColInfo[sheetName] = info;
+        return info;
+    }
+
+    function rowMatchesQuery(row, q) {
+        var keys = Object.keys(row);
+        for (var i = 0; i < keys.length; i++) {
+            var v = row[keys[i]];
+            if (v !== null && v !== undefined && String(v).toLowerCase().indexOf(q) !== -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Aggregation maps
     var moneyTransferMap = {};
     var terminalFlowMap = {};
@@ -333,25 +397,13 @@ function generateGraphElements(aggregateMode) {
                 var rows = sheets[sheetName];
                 if (!rows || !rows.length) continue;
 
-                var isMoneyTransfer = isSheetMoneyTransfer(sheetName, rows[0]);
+                // Pre-compute column info once per sheet
+                var colInfo = getColInfo(sheetName, rows[0]);
 
                 for (var ri = 0; ri < rows.length; ri++) {
                     var row = rows[ri];
-                    // Filter row by search query if active
-                    if (query !== "") {
-                        var rowVals = [];
-                        var tempKeys = Object.keys(row);
-                        for (var tki = 0; tki < tempKeys.length; tki++) {
-                            rowVals.push(row[tempKeys[tki]]);
-                        }
-                        var rowStr = "";
-                        for (var vi = 0; vi < rowVals.length; vi++) {
-                            if (rowVals[vi] !== null && rowVals[vi] !== undefined) {
-                                rowStr += String(rowVals[vi]).toLowerCase() + " ";
-                            }
-                        }
-                        if (rowStr.indexOf(query) === -1) continue;
-                    }
+                    // Filter row by search query if active (early exit on first match)
+                    if (query !== "" && !rowMatchesQuery(row, query)) continue;
 
                     // Add sender node
                     if (!addedNodes[cleanEntityId]) {
@@ -367,48 +419,11 @@ function generateGraphElements(aggregateMode) {
                         addedNodes[cleanEntityId] = true;
                     }
 
-                    var rowKeys = Object.keys(row);
-                    var entityCol = null;
-                    for (var ki = 0; ki < rowKeys.length; ki++) {
-                        var kl = rowKeys[ki].toLowerCase();
-                        for (var pi = 0; pi < window.appState.primaryEntityPatterns.length; pi++) {
-                            if (kl.indexOf(window.appState.primaryEntityPatterns[pi]) !== -1) {
-                                entityCol = rowKeys[ki];
-                                break;
-                            }
-                        }
-                        if (entityCol) break;
-                    }
-
-                    var amountCol = null;
-                    for (var ki = 0; ki < rowKeys.length; ki++) {
-                        if (rowKeys[ki].toLowerCase().indexOf("amount") !== -1) {
-                            amountCol = rowKeys[ki];
-                            break;
-                        }
-                    }
-                    var amountVal = amountCol ? row[amountCol] : "";
+                    var amountVal = colInfo.amountCol ? row[colInfo.amountCol] : "";
                     var amountNum = parseAmount(amountVal);
 
-                    if (isMoneyTransfer) {
-                        var receiverCol = null;
-                        for (var ki = 0; ki < rowKeys.length; ki++) {
-                            var kl = rowKeys[ki].toLowerCase();
-                            if (rowKeys[ki] === entityCol) continue; // Skip sender column
-
-                            if (kl.indexOf("to account") !== -1 || 
-                                kl.indexOf("beneficiary") !== -1 || 
-                                kl.indexOf("receiver") !== -1 || 
-                                kl.indexOf("transferred to") !== -1 || 
-                                kl.indexOf("destination") !== -1 ||
-                                kl === "account no" ||
-                                kl === "to_account" ||
-                                kl === "toacc") {
-                                receiverCol = rowKeys[ki];
-                                break;
-                            }
-                        }
-                        var receiverId = receiverCol ? String(row[receiverCol]).trim() : null;
+                    if (colInfo.isMoneyTransfer) {
+                        var receiverId = colInfo.receiverCol ? String(row[colInfo.receiverCol]).trim() : null;
 
                         if (receiverId && receiverId !== cleanEntityId) {
                             if (!addedNodes[receiverId]) {

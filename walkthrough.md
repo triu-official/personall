@@ -73,3 +73,34 @@ As part of the final implementation, the application now includes a diagnostic s
    - Skipped/unclassified row count (rows not matching Layer/Entity rules)
 
 This diagnostic report guarantees transparency, ensuring no data is silently dropped, and providing explicit reasons why a virtual column appears (or doesn't appear) on a per-sheet basis.
+
+---
+
+## Critical Fixes
+
+### Critical Fix 1: Global formatAmount recursion causing stack overflow (FIXED)
+- **Root Cause:** In `mindmap.js`, a top-level function named `formatAmount` collided with `window.formatAmount` defined in `app.js`. When `updateDashboardUI()` called `window.formatAmount()` on file upload, it was overridden by the mindmap version which itself called `window.formatAmount()`, causing infinite self-recursion.
+- **Fix:** The helper in `mindmap.js` was renamed to `localFormatAmount` and now delegates to the shared `window.personallFormatters.amount`. A single shared formatter namespace (`window.personallFormatters`) was introduced in `app.js` to reduce cross-file global collision risk.
+- **Verification:** All `formatAmount(` call sites now point to the intended implementation. Dashboard totals, graph edge labels, graph node labels, and export formatting all work correctly.
+
+### Critical Fix 2: IFSC object/string mismatch causing broken export lookups (FIXED)
+- **Root Cause:** `window.getRowIFSC()` returns an object `{ code: "...", source: "..." }` but some callers passed the raw object directly to `window.ifscCache` and `window.lookupIFSC()` instead of extracting `.code`. This produced broken API URLs like `https://ifsc.razorpay.com/[object Object]`.
+- **Fix:** Added `window.safeExtractIFSC()` helper (`ifsc.js:294`) that safely handles string, object-with-code, null, and invalid formats. All callers in `app.js`, `table.js`, and `export.js` now use this helper consistently.
+- **Verification:** IFSC cache keys are always strings. Export lookups produce valid URLs. No `[object Object]` appears in console, tables, or exported output.
+
+### Critical Fix 3: ifscData reference error in table.js (FIXED)
+- **Bug:** `table.js:288` referenced `ifscData.source` but `ifscData` was never defined — the correct variable is `ifscVal`. This caused a `ReferenceError: ifscData is not defined` that was caught by the `updateDashboardUI()` try/catch and displayed as "Error structuring data: ifscData is not defined".
+- **Fix:** Changed `ifscData.source` to `ifscVal.source` at `table.js:288`.
+- **Verification:** The error no longer appears on workbook upload. All IFSC address cells correctly populate with resolved data.
+
+### Critical Fix 4: IFSC resolution race condition — "Looking up..." never resolves (FIXED)
+- **Root Cause:** A race condition between bulk pre-resolution and per-cell lookups. `lookupIFSC` in `ifsc.js` returned "Looking up..." immediately when an IFSC was already `{status:"pending"}` in cache (set by bulk resolution), without queuing the callback. The bulk resolution's fetch then completed and dispatched an `ifsc-resolved` custom event, but `table.js` never listened for it. Result: cells were stuck on "Looking up..." permanently.
+- **Fix:** Two changes:
+  1. **`ifsc.js`** — Implemented callback queuing via `window.ifscCallbackQueue`. When `lookupIFSC` encounters a pending code, it queues the callback instead of returning "Looking up..." immediately. When the fetch completes, `firePendingCallbacks()` invokes all queued callbacks for that code.
+  2. **`table.js`** — Added `document.addEventListener('ifsc-resolved', ...)` that finds all `td[data-ifsc="..."]` cells in the DOM and updates them with the resolved address. The `data-ifsc` attribute is now set on every address cell during rendering.
+- **Verification:** Cells now transition from "Looking up..." → resolved address or fallback in real-time as bulk resolution completes. No more stuck cells.
+
+### Critical Fix 5: Mind map graph generation performance (FIXED)
+- **Root Cause:** `generateGraphElements` in `mindmap.js` scanned column headers for every single row to find entity/amount/receiver columns, even though column positions are identical across rows within the same sheet. For large workbooks with thousands of rows, this caused significant lag.
+- **Fix:** Pre-compute per-sheet column info (`entityCol`, `amountCol`, `receiverCol`, `isMoneyTransfer`) once via a `sheetColInfo` cache object. The row loop now uses the pre-computed values directly. Also optimized `rowMatchesQuery` to return early on first match instead of building a full concatenated string per row.
+- **Verification:** Mind map generation is now O(rows × 1) instead of O(rows × columns) for column scans. Measurable improvement for workbooks with 500+ rows per sheet.

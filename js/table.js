@@ -285,7 +285,8 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                             addressHtml += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
                         }
                         tdAddr.innerHTML = addressHtml;
-                        tdAddr.dataset.source = ifscData.source;
+                        tdAddr.dataset.source = ifscVal.source;
+                        if (cleanUpper) tdAddr.dataset.ifsc = cleanUpper;
                     } else {
                         tdAddr.innerText = "-";
                     }
@@ -665,6 +666,26 @@ function getLayerMatchCount(layerKey, query) {
     }
     return count;
 }
+
+// Listen for IFSC resolution events to update "Looking up..." cells in real-time
+document.addEventListener('ifsc-resolved', function(e) {
+    var code = e.detail && e.detail.code;
+    var result = e.detail && e.detail.result;
+    if (!code || !result) return;
+    var cells = document.querySelectorAll('td[data-ifsc="' + code + '"]');
+    for (var i = 0; i < cells.length; i++) {
+        var td = cells[i];
+        var html = result.address;
+        if (result.status === 'fallback') {
+            html += ' <button class="retry-ifsc-btn" data-ifsc="' + code + '" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+        }
+        var source = td.dataset.source;
+        if (source === 'sheet_metadata') {
+            html += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
+        }
+        td.innerHTML = html;
+    }
+});
 
 function setupSearchFilter() {
     const searchInput = document.getElementById("global-search");
