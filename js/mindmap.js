@@ -578,8 +578,9 @@ function formatAmount(val) {
     var num = parseFloat(String(val).replace(/,/g, ''));
     if (isNaN(num)) return val;
 
-    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
-    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    if (num >= 10000000) return (num / 10000000).toFixed(2) + ' Cr';
+    if (num >= 100000) return (num / 100000).toFixed(2) + ' L';
+    if (num >= 1000) return (num / 1000).toFixed(1) + ' K';
     return num.toFixed(2);
 }
 

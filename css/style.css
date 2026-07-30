@@ -591,6 +591,27 @@ header.top-bar h1 {
 
 .transaction-section {
     padding: 15px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Custom scrollbar for wide tables */
+.transaction-section::-webkit-scrollbar {
+    height: 8px;
+}
+
+.transaction-section::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.transaction-section::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 4px;
+}
+
+.transaction-section::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
 }
 
 .transaction-section h4 {

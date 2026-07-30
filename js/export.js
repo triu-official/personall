@@ -93,6 +93,38 @@ async function generateWordDocument() {
     // Allow UI to render loading state
     setTimeout(async () => {
         try {
+            // Pre-resolve selected IFSC codes
+            const ifscSet = new Set();
+            const selections = window.exportState.selections;
+            const rawData = window.appState.rawData;
+
+            Object.keys(rawData).forEach(sheetName => {
+                const selectedCols = selections[sheetName] || [];
+                if (!selectedCols.includes("Bank Branch & Address")) return;
+
+                const rows = rawData[sheetName].rows || [];
+                rows.forEach(row => {
+                    const ifscVal = window.getRowIFSC(sheetName, row);
+                    if (ifscVal && (!window.ifscCache || !window.ifscCache[ifscVal])) {
+                        ifscSet.add(ifscVal);
+                    }
+                });
+            });
+
+            const ifscList = Array.from(ifscSet);
+            if (ifscList.length > 0) {
+                for (let i = 0; i < ifscList.length; i++) {
+                    if (loadingUI) {
+                        loadingUI.innerHTML = `<div class="spinner-small"></div> Resolving bank addresses (${i + 1}/${ifscList.length})...`;
+                    }
+                    await new Promise(resolve => {
+                        window.lookupIFSC(ifscList[i], function() {
+                            resolve();
+                        });
+                    });
+                }
+            }
+
             const doc = await buildDocxObject();
             if (loadingUI) {
                 loadingUI.innerHTML = `<div class="spinner-small"></div> Packing file...`;
@@ -187,19 +219,28 @@ async function buildDocxObject() {
             flatRows.forEach((rowObj, index) => {
                 const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
                 tableRows.push(new docx.TableRow({
-                    children: headers.map(header => new docx.TableCell({
-                        children: [new docx.Paragraph({
-                            children: [
-                                new docx.TextRun({
-                                    text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : ''),
-                                    font: "Calibri",
-                                    size: 19 // 9.5pt
-                                })
-                            ]
-                        })],
-                        shading: { fill: rowColor },
-                        margins: { top: 60, bottom: 60, left: 120, right: 120 }
-                    }))
+                    children: headers.map(header => {
+                        let cellText = "";
+                        if (header === "Bank Branch & Address") {
+                            const ifscVal = window.getRowIFSC(sheetName, rowObj);
+                            cellText = window.getIFSCCachedSync(ifscVal).address;
+                        } else {
+                            cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
+                        }
+                        return new docx.TableCell({
+                            children: [new docx.Paragraph({
+                                children: [
+                                    new docx.TextRun({
+                                        text: cellText,
+                                        font: "Calibri",
+                                        size: 19 // 9.5pt
+                                    })
+                                ]
+                            })],
+                            shading: { fill: rowColor },
+                            margins: { top: 60, bottom: 60, left: 120, right: 120 }
+                        });
+                    })
                 }));
             });
         } else {
@@ -230,19 +271,28 @@ async function buildDocxObject() {
                 group.rows.forEach((rowObj, index) => {
                     const rowColor = index % 2 === 0 ? "FFFFFF" : "F8F9F9";
                     tableRows.push(new docx.TableRow({
-                        children: headers.map(header => new docx.TableCell({
-                            children: [new docx.Paragraph({
-                                children: [
-                                    new docx.TextRun({
-                                        text: String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : ''),
-                                        font: "Calibri",
-                                        size: 19
-                                    })
-                                ]
-                            })],
-                            shading: { fill: rowColor },
-                            margins: { top: 60, bottom: 60, left: 120, right: 120 }
-                        }))
+                        children: headers.map(header => {
+                            let cellText = "";
+                            if (header === "Bank Branch & Address") {
+                                const ifscVal = window.getRowIFSC(sheetName, rowObj);
+                                cellText = window.getIFSCCachedSync(ifscVal).address;
+                            } else {
+                                cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
+                            }
+                            return new docx.TableCell({
+                                children: [new docx.Paragraph({
+                                    children: [
+                                        new docx.TextRun({
+                                            text: cellText,
+                                            font: "Calibri",
+                                            size: 19
+                                        })
+                                    ]
+                                })],
+                                shading: { fill: rowColor },
+                                margins: { top: 60, bottom: 60, left: 120, right: 120 }
+                            });
+                        })
                     }));
                 });
             });
@@ -573,7 +623,10 @@ function renderExportModal() {
         if (isUnclassified) hasUnclassified = true;
         else hasClassified = true;
 
-        const groupDiv = createSheetGroup(sheetName, headers, rows, isUnclassified);
+        const displayedHeaders = [].concat(headers);
+        displayedHeaders.push("Bank Branch & Address");
+
+        const groupDiv = createSheetGroup(sheetName, displayedHeaders, rows, isUnclassified);
         container.appendChild(groupDiv);
     });
 

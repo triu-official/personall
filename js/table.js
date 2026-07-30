@@ -203,6 +203,10 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
             th.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
             trHead.appendChild(th);
         });
+        const thAddr = document.createElement("th");
+        thAddr.innerText = "Bank Branch & Address";
+        thAddr.className = "resolved-address-header";
+        trHead.appendChild(thAddr);
         thead.appendChild(trHead);
         table.appendChild(thead);
 
@@ -243,6 +247,20 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                     td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
                     tr.appendChild(td);
                 });
+
+                const tdAddr = document.createElement("td");
+                tdAddr.className = "resolved-address-cell";
+                const ifscVal = window.getRowIFSC(sheetName, row);
+                if (ifscVal) {
+                    tdAddr.innerText = "Loading address...";
+                    window.lookupIFSC(ifscVal, function(details) {
+                        tdAddr.innerText = details.address;
+                    });
+                } else {
+                    tdAddr.innerText = "-";
+                }
+                tr.appendChild(tdAddr);
+
                 tbody.appendChild(tr);
             }
 

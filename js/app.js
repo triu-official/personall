@@ -12,7 +12,8 @@ window.appState = {
     searchIndex: [],
     mindMapReady: false,
     primaryEntityPatterns: ["account no", "wallet", "pg", "pa", "id", "account no./(wallet/pg/pa) id"],
-    layerPatterns: ["layer", "layer no", "lyr"]
+    layerPatterns: ["layer", "layer no", "lyr"],
+    sheetIFSC: {}
 };
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -400,12 +401,28 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
 
                 if (rawRows.length > 0) {
                     var headerRowIndex = 0;
+                    var detectedIFSC = null;
+                    var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
+
                     for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
                         var row = rawRows[i];
-                        if (row && row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
-                            headerRowIndex = i;
-                            break;
+                        if (row) {
+                            for (var c = 0; c < row.length; c++) {
+                                var val = String(row[c] || "");
+                                var match = val.match(ifscRegex);
+                                if (match) {
+                                    detectedIFSC = match[1].toUpperCase();
+                                }
+                            }
+                            if (row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
+                                headerRowIndex = i;
+                                break;
+                            }
                         }
+                    }
+
+                    if (detectedIFSC) {
+                        window.appState.sheetIFSC[sn] = detectedIFSC;
                     }
 
                     var headers = rawRows[headerRowIndex].map(function (h) {
@@ -490,11 +507,23 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
 
                     if (rawRows.length > 0) {
                         var headerRowIndex = 0;
+                        var detectedIFSC = null;
+                        var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
+
                         for (var i = 0; i < Math.min(rawRows.length, 10); i++) {
                             var row = rawRows[i];
-                            if (row && row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
-                                headerRowIndex = i;
-                                break;
+                            if (row) {
+                                for (var c = 0; c < row.length; c++) {
+                                    var val = String(row[c] || "");
+                                    var match = val.match(ifscRegex);
+                                    if (match) {
+                                        detectedIFSC = match[1].toUpperCase();
+                                    }
+                                }
+                                if (row.filter(function (c) { return c !== null && c !== ""; }).length > 2) {
+                                    headerRowIndex = i;
+                                    break;
+                                }
                             }
                         }
 
@@ -521,6 +550,10 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
                                 sheetKey = sn + " [" + baseName + "]";
                             }
                             mergedRawData[sheetKey] = { headers: headers, rows: dataRows };
+
+                            if (detectedIFSC) {
+                                window.appState.sheetIFSC[sheetKey] = detectedIFSC;
+                            }
                         }
                     }
                 });
@@ -557,8 +590,15 @@ function updateDashboardUI() {
     document.getElementById("stat-entities").innerText = window.appState.stats.entities;
     document.getElementById("stat-txns").innerText = window.appState.stats.transactions;
 
-    var formatter = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    document.getElementById("stat-amount").innerText = formatter.format(window.appState.stats.totalAmount);
+    var formatter = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var totalAmt = window.appState.stats.totalAmount;
+    var suffix = "";
+    if (totalAmt >= 10000000) {
+        suffix = " (" + (totalAmt / 10000000).toFixed(2) + " Cr)";
+    } else if (totalAmt >= 100000) {
+        suffix = " (" + (totalAmt / 100000).toFixed(2) + " Lk)";
+    }
+    document.getElementById("stat-amount").innerText = formatter.format(totalAmt) + suffix;
 
     if (window.renderSidebarAndTables) {
         window.renderSidebarAndTables();
