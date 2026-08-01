@@ -1,13 +1,17 @@
+(function(App) {
+    'use strict';
+
+    var Table = App.Table || {};
 // Table rendering and filtering logic
-window.renderSidebarAndTables = function() {
-    const layers = window.appState.layers;
+function renderSidebarAndTables() {
+    const layers = App.state.layers;
     const navigator = document.getElementById("layer-navigator");
     const container = document.getElementById("table-container");
 
     navigator.innerHTML = "";
     container.innerHTML = "";
 
-    const query = window.lastSearchQuery || "";
+    const query = App.state.lastSearchQuery || "";
 
     layers.forEach((layerKey, index) => {
         const entityCount = getMatchingEntityCountForLayer(layerKey, query);
@@ -71,13 +75,13 @@ function switchLayer(layerKey, activeLi) {
     }
 
     // Update active search summary chips
-    if (window.lastSearchQuery !== "") {
-        performSearch(window.lastSearchQuery, false);
+    if (App.state.lastSearchQuery !== "") {
+        performSearch(App.state.lastSearchQuery, false);
     }
 
     // Highlight layer in graph as well
-    if (window.appState.cy && window.highlightLayerInGraph) {
-        window.highlightLayerInGraph(window.appState.cy, layerKey);
+    if (App.state.cy && App.Graph.highlightLayerInGraph) {
+        App.Graph.highlightLayerInGraph(App.state.cy, layerKey);
     }
 }
 
@@ -87,12 +91,12 @@ var ENTITIES_PER_FRAME = 8;
 var ROWS_BEFORE_YIELD = 120;
 
 function renderLayerData(layerKey, container) {
-    const entities = window.appState.structuredData[layerKey];
+    const entities = App.state.structuredData[layerKey];
     if (!entities) return;
 
-    const currentLayerIndex = window.appState.layers.indexOf(layerKey);
-    const prevLayerKey = currentLayerIndex > 0 ? window.appState.layers[currentLayerIndex - 1] : null;
-    const query = window.lastSearchQuery || "";
+    const currentLayerIndex = App.state.layers.indexOf(layerKey);
+    const prevLayerKey = currentLayerIndex > 0 ? App.state.layers[currentLayerIndex - 1] : null;
+    const query = App.state.lastSearchQuery || "";
 
     // Pre-filter: figure out which entities have matches before starting DOM work
     const entityNames = Object.keys(entities);
@@ -193,8 +197,8 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
         const table = document.createElement("table");
         table.className = "data-table";
 
-        const originalHeaders = window.appState.rawData[sheetName].headers;
-        const hasIFSC = window.hasIFSCData(sheetName);
+        const originalHeaders = App.state.rawData[sheetName].headers;
+        const hasIFSC = App.IFSC.hasIFSCData(sheetName);
 
         const thead = document.createElement("thead");
         const trHead = document.createElement("tr");
@@ -253,7 +257,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                     const td = document.createElement("td");
                     // Apply global formatting logic to amounts
                     if (col.toLowerCase().includes("amount") && typeof row[col] !== 'undefined') {
-                        td.innerText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(row[col]) : (row[col] !== null ? row[col] : "—");
+                        td.innerText = (App.formatters && App.formatters.amount) ? App.formatters.amount(row[col]) : (row[col] !== null ? row[col] : "—");
                     } else {
                         td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
                     }
@@ -264,12 +268,12 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                 if (hasIFSC) {
                     const tdAddr = document.createElement("td");
                     tdAddr.className = "resolved-address-cell";
-                    const ifscVal = window.getRowIFSC(sheetName, row);
-                    const clean = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                    const ifscVal = App.IFSC.getRowIFSC(sheetName, row);
+                    const clean = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
 
                     if (clean) {
                         const cleanUpper = String(clean).trim().toUpperCase();
-                        const cached = window.ifscCache && window.ifscCache[cleanUpper];
+                        const cached = App.IFSC.getCache() && App.IFSC.getCache()[cleanUpper];
 
                         let addressHtml = "";
                         if (cached && cached.status === 'resolved') {
@@ -305,10 +309,10 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                         const code = this.dataset.ifsc;
                         this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
                         // Delete fallback from cache to force network call
-                        if (window.ifscCache && window.ifscCache[code]) {
-                            delete window.ifscCache[code];
+                        if (App.IFSC.getCache() && App.IFSC.getCache()[code]) {
+                            delete App.IFSC.getCache()[code];
                         }
-                        window.lookupIFSC(code, function(details) {
+                        App.IFSC.lookupIFSC(code, function(details) {
                             // Re-render page to show new value
                             table.renderPage();
                         });
@@ -318,7 +322,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
 
             // Trigger resolution for cells that need it (if any were not already cached or falling back)
             ifscCellsToUpdate.forEach(item => {
-                window.lookupIFSC(item.ifsc, function(details) {
+                App.IFSC.lookupIFSC(item.ifsc, function(details) {
                     // Update cell if still in DOM
                     if (document.body.contains(item.td)) {
                         let html = details.address;
@@ -338,8 +342,8 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                                     e.preventDefault();
                                     const code = this.dataset.ifsc;
                                     this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                                    if (window.ifscCache && window.ifscCache[code]) delete window.ifscCache[code];
-                                    window.lookupIFSC(code, function() { table.renderPage(); });
+                                    if (App.IFSC.getCache() && App.IFSC.getCache()[code]) delete App.IFSC.getCache()[code];
+                                    App.IFSC.lookupIFSC(code, function() { table.renderPage(); });
                                 });
                             }
                         }
@@ -385,10 +389,10 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
 }
 
 function checkCrossReference(prevLayerKey, currentEntityName) {
-    const prevLayerEntities = window.appState.structuredData[prevLayerKey];
+    const prevLayerEntities = App.state.structuredData[prevLayerKey];
     if (!prevLayerEntities) return false;
 
-    const primaryPatterns = window.appState.primaryEntityPatterns || [];
+    const primaryPatterns = App.state.primaryEntityPatterns || [];
 
     for (const senderEntity in prevLayerEntities) {
         for (const sheetName in prevLayerEntities[senderEntity]) {
@@ -445,7 +449,7 @@ function checkCrossReference(prevLayerKey, currentEntityName) {
 
 function isPrimaryEntityCol(colName) {
     const lower = colName.toLowerCase();
-    return window.appState.primaryEntityPatterns.some(p => lower.includes(p));
+    return App.state.primaryEntityPatterns.some(p => lower.includes(p));
 }
 
 function setupPrimaryEntityToggle(skipEvent = false) {
@@ -465,18 +469,18 @@ function setupPrimaryEntityToggle(skipEvent = false) {
     updateVisibility();
 }
 
-window.lastSearchQuery = "";
+App.state.lastSearchQuery = "";
 
 function performSearch(queryText = null, updateWindowRef = true) {
     const searchInput = document.getElementById("global-search");
     const query = queryText !== null ? queryText : searchInput.value.toLowerCase().trim();
     
     if (updateWindowRef) {
-        window.lastSearchQuery = query;
+        App.state.lastSearchQuery = query;
         searchInput.value = query;
     }
 
-    const layers = window.appState.layers;
+    const layers = App.state.layers;
     const navigator = document.getElementById("layer-navigator");
     const summaryBar = document.getElementById("search-summary-bar");
 
@@ -487,7 +491,7 @@ function performSearch(queryText = null, updateWindowRef = true) {
     const matchedEntitiesSet = new Set();
 
     if (query !== "") {
-        const searchIndex = window.appState.searchIndex;
+        const searchIndex = App.state.searchIndex;
         for (let i = 0; i < searchIndex.length; i++) {
             if (searchIndex[i].normalizedText.includes(query)) {
                 totalMatches++;
@@ -529,7 +533,7 @@ function performSearch(queryText = null, updateWindowRef = true) {
             matchedLayersSet.forEach(layerKey => {
                 const count = layerMatchCounts[layerKey];
                 const isActive = (layerKey === activeLayerKey);
-                discoveryHTML += `<button class="search-chip ${isActive ? 'active-chip' : ''}" onclick="window.jumpToLayerFromSearch('${layerKey.replace(/'/g, "\\'")}')">${layerKey} (${count})</button>`;
+                discoveryHTML += `<button class="search-chip ${isActive ? 'active-chip' : ''}" onclick="PersonallApp.Table.jumpToLayerFromSearch('${layerKey.replace(/'/g, "\\'")}')">${layerKey} (${count})</button>`;
             });
             discoveryHTML += `</div>`;
         }
@@ -548,7 +552,7 @@ function performSearch(queryText = null, updateWindowRef = true) {
         if (query) {
             // Count unique entities for this layer from the index
             const entitySet = new Set();
-            const searchIndex = window.appState.searchIndex;
+            const searchIndex = App.state.searchIndex;
             for (let i = 0; i < searchIndex.length; i++) {
                 if (searchIndex[i].layer === layerKey && searchIndex[i].normalizedText.includes(query)) {
                     entitySet.add(searchIndex[i].entity);
@@ -602,13 +606,13 @@ function performSearch(queryText = null, updateWindowRef = true) {
     // 6. Update the Mind Map Graph only if the graph tab is active AND graph was initialized
     // This avoids expensive Cytoscape rebuild when user is on table view
     const graphTab = document.querySelector('.tab-btn[data-target="graph-view"]');
-    if (window.appState.cy && window.initMindMap && graphTab && graphTab.classList.contains("active")) {
-        window.initMindMap();
+    if (App.state.cy && App.Graph.initMindMap && graphTab && graphTab.classList.contains("active")) {
+        App.Graph.initMindMap();
     }
 }
-window.performSearch = performSearch;
+Table.performSearch = performSearch;
 
-window.jumpToLayerFromSearch = function(layerKey) {
+function jumpToLayerFromSearch(layerKey) {
     const navigator = document.getElementById("layer-navigator");
     const lis = navigator.querySelectorAll("li");
     let targetLi = null;
@@ -625,7 +629,7 @@ window.jumpToLayerFromSearch = function(layerKey) {
 };
 
 function getMatchingEntityCountForLayer(layerKey, query) {
-    const entities = window.appState.structuredData[layerKey];
+    const entities = App.state.structuredData[layerKey];
     if (!entities) return 0;
     if (!query) return Object.keys(entities).length;
 
@@ -657,7 +661,7 @@ function getMatchingEntityCountForLayer(layerKey, query) {
 
 function getLayerMatchCount(layerKey, query) {
     if (!query) return 0;
-    const searchIndex = window.appState.searchIndex;
+    const searchIndex = App.state.searchIndex;
     let count = 0;
     for (let i = 0; i < searchIndex.length; i++) {
         if (searchIndex[i].layer === layerKey && searchIndex[i].normalizedText.includes(query)) {
@@ -710,3 +714,10 @@ function setupSearchFilter() {
         }
     });
 }
+
+    // Expose methods
+    Table.renderSidebarAndTables = renderSidebarAndTables;
+    Table.jumpToLayerFromSearch = jumpToLayerFromSearch;
+
+    App.Table = Table;
+})(window.PersonallApp);
