@@ -1,11 +1,15 @@
-window.ifscCache = JSON.parse(localStorage.getItem('personall_ifsc_cache') || '{}');
+(function(App) {
+    'use strict';
 
-window.ifscApiBlocked = false;
-window.ifscBulkQueue = [];
-window.ifscBulkInProgress = false;
-window.ifscCallbackQueue = {}; // { IFSC: [callback, ...] } for pending lookups
+    var IFSC = App.IFSC || {};
+    var ifscCache = JSON.parse(localStorage.getItem('personall_ifsc_cache') || '{}');
+    var ifscApiBlocked = false;
+    var ifscApiTested = false;
+    var ifscCallbackQueue = {}; // { IFSC: [callback, ...] } for pending lookups
 
-window.getBankNameFromIFSC = function(ifsc) {
+
+
+function getBankNameFromIFSC(ifsc) {
     if (!ifsc || ifsc.length < 4) return "Unknown Bank";
     var prefix = ifsc.substring(0, 4).toUpperCase();
     var banks = {
@@ -57,20 +61,20 @@ window.getBankNameFromIFSC = function(ifsc) {
 // Ensure cache is not blown by catching quota exceeded errors
 function saveCacheSafe() {
     try {
-        localStorage.setItem('personall_ifsc_cache', JSON.stringify(window.ifscCache));
+        localStorage.setItem('personall_ifsc_cache', JSON.stringify(ifscCache));
     } catch(e) {
         console.warn("LocalStorage cache write failed. Cache might be full.", e);
         if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
             // Very naive eviction: clear half the cache if it gets too big
-            var keys = Object.keys(window.ifscCache);
+            var keys = Object.keys(ifscCache);
             if (keys.length > 500) {
                 var newCache = {};
                 for (var i = Math.floor(keys.length / 2); i < keys.length; i++) {
-                    newCache[keys[i]] = window.ifscCache[keys[i]];
+                    newCache[keys[i]] = ifscCache[keys[i]];
                 }
-                window.ifscCache = newCache;
+                ifscCache = newCache;
                 try {
-                    localStorage.setItem('personall_ifsc_cache', JSON.stringify(window.ifscCache));
+                    localStorage.setItem('personall_ifsc_cache', JSON.stringify(ifscCache));
                 } catch(e2) {
                     console.error("Cache still full after eviction", e2);
                 }
@@ -79,15 +83,15 @@ function saveCacheSafe() {
     }
 }
 
-window.testIfscApi = function() {
+function testIfscApi() {
     // Only test once
-    if (window.ifscApiTested) return Promise.resolve(!window.ifscApiBlocked);
-    window.ifscApiTested = true;
+    if (ifscApiTested) return Promise.resolve(!ifscApiBlocked);
+    ifscApiTested = true;
 
-    var apiUrl = (window.APP_CONFIG && window.APP_CONFIG.RAZORPAY_IFSC_API_URL) ? window.APP_CONFIG.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
+        var apiUrl = (App.config && App.config.RAZORPAY_IFSC_API_URL) ? App.config.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
 
     var fetchOptions = {};
-    var apiKey = (window.APP_CONFIG && (window.APP_CONFIG.IFSC_API_KEY || window.APP_CONFIG.RAZORPAY_IFSC_API_KEY));
+        var apiKey = (App.config && (App.config.IFSC_API_KEY || App.config.RAZORPAY_IFSC_API_KEY));
     if (apiKey) {
         fetchOptions.headers = {
             "Authorization": "Bearer " + apiKey,
@@ -100,15 +104,14 @@ window.testIfscApi = function() {
 
         .then(function(res) {
             if (res.ok) {
-                window.ifscApiBlocked = false;
-                return true;
+                                return true;
             } else {
                 throw new Error("API returned non-ok");
             }
         })
         .catch(function(err) {
             console.warn("IFSC API Blocked (likely CORS/file:// protocol)", err);
-            window.ifscApiBlocked = true;
+            ifscApiBlocked = true;
             showLocalServerBanner();
             return false;
         });
@@ -135,7 +138,7 @@ function showLocalServerBanner() {
 }
 
 
-window.lookupIFSC = function(ifscCode, callback) {
+function lookupIFSC(ifscCode, callback) {
     if (!ifscCode) {
         callback({ address: "-", bank: "-", branch: "-", status: "error" });
         return;
@@ -143,12 +146,12 @@ window.lookupIFSC = function(ifscCode, callback) {
     var clean = String(ifscCode).trim().toUpperCase();
 
     // Check Cache
-    if (window.ifscCache[clean] && window.ifscCache[clean].status !== "pending") {
-        callback(window.ifscCache[clean]);
+    if (ifscCache[clean] && ifscCache[clean].status !== "pending") {
+        callback(ifscCache[clean]);
         return;
     }
 
-    var fallbackBank = window.getBankNameFromIFSC(clean);
+    var fallbackBank = getBankNameFromIFSC(clean);
     var fallbackData = {
         address: fallbackBank + " (Address Lookup Offline/Failed)",
         bank: fallbackBank,
@@ -156,29 +159,29 @@ window.lookupIFSC = function(ifscCode, callback) {
         status: "fallback"
     };
 
-    if (window.ifscApiBlocked) {
-        window.ifscCache[clean] = fallbackData;
+    if (ifscApiBlocked) {
+        ifscCache[clean] = fallbackData;
         saveCacheSafe();
         callback(fallbackData);
         return;
     }
 
     // Check if there's already a pending request for this IFSC
-    if (window.ifscCache[clean] && window.ifscCache[clean].status === "pending") {
+    if (ifscCache[clean] && ifscCache[clean].status === "pending") {
         // Queue the callback — it will be called when the fetch completes
-        if (!window.ifscCallbackQueue[clean]) {
-            window.ifscCallbackQueue[clean] = [];
+        if (!ifscCallbackQueue[clean]) {
+            ifscCallbackQueue[clean] = [];
         }
-        window.ifscCallbackQueue[clean].push(callback);
+        ifscCallbackQueue[clean].push(callback);
         return;
     }
 
-    window.ifscCache[clean] = { status: "pending" };
+    ifscCache[clean] = { status: "pending" };
 
-    var apiUrl = (window.APP_CONFIG && window.APP_CONFIG.RAZORPAY_IFSC_API_URL) ? window.APP_CONFIG.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
+        var apiUrl = (App.config && App.config.RAZORPAY_IFSC_API_URL) ? App.config.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
 
     var fetchOptions = {};
-    var apiKey = (window.APP_CONFIG && (window.APP_CONFIG.IFSC_API_KEY || window.APP_CONFIG.RAZORPAY_IFSC_API_KEY));
+        var apiKey = (App.config && (App.config.IFSC_API_KEY || App.config.RAZORPAY_IFSC_API_KEY));
     if (apiKey) {
         fetchOptions.headers = {
             "Authorization": "Bearer " + apiKey,
@@ -221,7 +224,7 @@ window.lookupIFSC = function(ifscCode, callback) {
                 status: "resolved"
             };
 
-            window.ifscCache[clean] = result;
+            ifscCache[clean] = result;
             saveCacheSafe();
             // Call the primary callback
             callback(result);
@@ -230,15 +233,15 @@ window.lookupIFSC = function(ifscCode, callback) {
         })
         .catch(function(err) {
             // Save fallback to cache temporarily to prevent repeat calls during this session
-            window.ifscCache[clean] = fallbackData;
+            ifscCache[clean] = fallbackData;
             callback(fallbackData);
             firePendingCallbacks(clean, fallbackData);
         });
 
     function firePendingCallbacks(code, result) {
-        var q = window.ifscCallbackQueue[code];
+        var q = ifscCallbackQueue[code];
         if (q) {
-            delete window.ifscCallbackQueue[code];
+            delete ifscCallbackQueue[code];
             for (var i = 0; i < q.length; i++) {
                 q[i](result);
             }
@@ -247,13 +250,13 @@ window.lookupIFSC = function(ifscCode, callback) {
 };
 
 
-window.getIFSCCachedSync = function(ifscCode) {
+function getIFSCCachedSync(ifscCode) {
     if (!ifscCode) return { address: "-", bank: "-", branch: "-", status: "error" };
     var clean = String(ifscCode).trim().toUpperCase();
-    if (window.ifscCache[clean]) {
-        return window.ifscCache[clean];
+    if (ifscCache[clean]) {
+        return ifscCache[clean];
     }
-    var fallbackBank = window.getBankNameFromIFSC(clean);
+    var fallbackBank = getBankNameFromIFSC(clean);
     return {
         address: fallbackBank + " (Address Lookup Pending)",
         bank: fallbackBank,
@@ -262,14 +265,14 @@ window.getIFSCCachedSync = function(ifscCode) {
     };
 };
 
-window.hasIFSCData = function(sheetName) {
-    if (!window.appState || !window.appState.rawData || !window.appState.rawData[sheetName]) return false;
+function hasIFSCData(sheetName) {
+    if (!App.state || !App.state.rawData || !App.state.rawData[sheetName]) return false;
     
     // 1. Check sheet-level metadata
-    if (window.appState.sheetIFSC && window.appState.sheetIFSC[sheetName]) return true;
+    if (App.state.sheetIFSC && App.state.sheetIFSC[sheetName]) return true;
 
     // 2. Check headers
-    var headers = window.appState.rawData[sheetName].headers;
+    var headers = App.state.rawData[sheetName].headers;
     var hasHeader = headers.some(h => {
         var hl = h.toLowerCase().replace(/[\s_\-\/]/g, "");
         return hl.includes("ifsc") || hl.includes("ifs") || hl.includes("branchcode") || hl.includes("solid");
@@ -277,7 +280,7 @@ window.hasIFSCData = function(sheetName) {
     if (hasHeader) return true;
 
     // 3. Check sample values (scan first 100 rows)
-    var rows = window.appState.rawData[sheetName].rows || [];
+    var rows = App.state.rawData[sheetName].rows || [];
     var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
     for (var i = 0; i < Math.min(rows.length, 100); i++) {
         var row = rows[i];
@@ -290,13 +293,13 @@ window.hasIFSCData = function(sheetName) {
     return false;
 };
 
-window.getRowIFSC = function(sheetName, rowObj) {
+function getRowIFSC(sheetName, rowObj) {
     if (!rowObj) return null;
     var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
 
     // 1. Check direct cells in this row matching the regex
-    var headers = (window.appState && window.appState.rawData && window.appState.rawData[sheetName])
-        ? window.appState.rawData[sheetName].headers
+    var headers = (App.state && App.state.rawData && App.state.rawData[sheetName])
+        ? App.state.rawData[sheetName].headers
         : Object.keys(rowObj);
 
     // Look for column names that match first
@@ -319,31 +322,31 @@ window.getRowIFSC = function(sheetName, rowObj) {
     }
 
     // 2. Check sheet-level metadata as fallback
-    if (window.appState && window.appState.sheetIFSC && window.appState.sheetIFSC[sheetName]) {
-        return { code: window.appState.sheetIFSC[sheetName], source: 'sheet_metadata' };
+    if (App.state && App.state.sheetIFSC && App.state.sheetIFSC[sheetName]) {
+        return { code: App.state.sheetIFSC[sheetName], source: 'sheet_metadata' };
     }
 
     return null;
 };
 
-window.safeExtractIFSC = function(val) {
+function safeExtractIFSC(val) {
     if (val === null || val === undefined) return null;
     if (typeof val === 'string') return val;
     if (typeof val === 'object' && val.code) return val.code;
-    if (!window.safeExtractIFSC._loggedWarning) {
+    if (!safeExtractIFSC._loggedWarning) {
         console.warn("safeExtractIFSC: ignored invalid IFSC format", val);
-        window.safeExtractIFSC._loggedWarning = true;
+        safeExtractIFSC._loggedWarning = true;
     }
     return null;
 };
 
 // Bulk resolution system — accepts either a Set or an ordered Array
 // When an Array is passed, the order is preserved (layer priority).
-window.startBulkIFSCResolution = function(ifscInput, onComplete, onProgress) {
+function startBulkIFSCResolution(ifscInput, onComplete, onProgress) {
     var ifscList = (ifscInput instanceof Array) ? ifscInput.slice() : Array.from(ifscInput);
     ifscList = ifscList.filter(function(code) {
         var clean = String(code).trim().toUpperCase();
-        return !window.ifscCache[clean] || (window.ifscCache[clean].status !== 'resolved' && window.ifscCache[clean].status !== 'fallback');
+        return !ifscCache[clean] || (ifscCache[clean].status !== 'resolved' && ifscCache[clean].status !== 'fallback');
     });
 
     if (ifscList.length === 0) {
@@ -351,13 +354,13 @@ window.startBulkIFSCResolution = function(ifscInput, onComplete, onProgress) {
         return;
     }
 
-    window.testIfscApi().then(function(isOk) {
+    testIfscApi().then(function(isOk) {
         if (!isOk) {
             // API blocked, quickly mark all as fallback
             ifscList.forEach(function(code) {
                 var clean = String(code).trim().toUpperCase();
-                var fb = window.getBankNameFromIFSC(clean);
-                window.ifscCache[clean] = {
+                var fb = getBankNameFromIFSC(clean);
+                ifscCache[clean] = {
                     address: fb + " (Address Lookup Offline/Failed)",
                     bank: fb,
                     branch: "",
@@ -388,7 +391,7 @@ window.startBulkIFSCResolution = function(ifscInput, onComplete, onProgress) {
 
                 setTimeout((function(c) {
                     return function() {
-                        window.lookupIFSC(c, function(res) {
+                        lookupIFSC(c, function(res) {
                             completed++;
                             active--;
                             if (onProgress) onProgress(completed, total);
@@ -405,3 +408,17 @@ window.startBulkIFSCResolution = function(ifscInput, onComplete, onProgress) {
         processNext();
     });
 };
+
+    // Expose methods
+    IFSC.getBankNameFromIFSC = getBankNameFromIFSC;
+    IFSC.testIfscApi = testIfscApi;
+    IFSC.lookupIFSC = lookupIFSC;
+    IFSC.getIFSCCachedSync = getIFSCCachedSync;
+    IFSC.hasIFSCData = hasIFSCData;
+    IFSC.getRowIFSC = getRowIFSC;
+    IFSC.safeExtractIFSC = safeExtractIFSC;
+    IFSC.startBulkIFSCResolution = startBulkIFSCResolution;
+    IFSC.getCache = function() { return ifscCache; };
+
+    App.IFSC = IFSC;
+})(window.PersonallApp);

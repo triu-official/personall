@@ -145,7 +145,19 @@ The `docx` library supports browser-side Word document generation, and published
 
 ## Starting the App
 
-### Option A: Open Directly
+### Option A: Use the Local Server Scripts (Recommended)
+
+For the best experience, run the provided local server scripts. This ensures that live IFSC lookups don't get blocked by CORS restrictions associated with the `file://` protocol.
+
+**On Windows:**
+Double-click `run_local.bat`
+
+**On macOS / Linux:**
+Open a terminal and run `./run_local.sh`
+
+These scripts will automatically start a lightweight local web server using Python (or fall back to instructions for `npx serve`) and open the application in your default browser at `http://localhost:8000`.
+
+### Option B: Open Directly
 
 After placing the required library files in `libs/`, double-click:
 
@@ -157,14 +169,16 @@ This opens the application directly in the browser using the `file://` protocol.
 
 Core workbook processing, table views, graph views, and Word export run locally in the browser. Live IFSC address lookup is optional and may require internet access; cached and fallback information remains available offline.
 
-### Option B: Recommended Local Server
+### Option C: Manual Local Server
 
-For the best experience, especially for **live IFSC address lookup**, run a local server.
-
-Open a terminal inside the project folder and run:
+If the scripts aren't working for you, you can manually run a local server. Open a terminal inside the project folder and run:
 
 ```bash
 python -m http.server 8000
+```
+or
+```bash
+python3 -m http.server 8000
 ```
 
 Then open:
@@ -568,7 +582,7 @@ Check:
 
 ***
 
-## Development
+## Development & Architecture
 
 This project uses:
 
@@ -581,7 +595,14 @@ This project uses:
 
 It intentionally uses standard `<script>` tags rather than ES modules so the core application can be opened directly through the `file://` protocol.
 
-No backend, database server, package manager, or build tool is required.
+### Single Page Application (SPA) Structure
+
+The application has been refactored to use a safer SPA-style architecture:
+- **Shared App State**: Variables and flags have been centralized under a single `window.PersonallApp.state` namespace.
+- **Module boundaries**: `js/app.js`, `js/table.js`, `js/mindmap.js`, `js/ifsc.js`, and `js/export.js` are wrapped in Immediately Invoked Function Expressions (IIFEs) rather than cluttering the global `window.*` object with conflicting globals.
+- **Robust Rendering**: Responsibilities for DOM re-renders and Cytoscape initializations have been carefully routed through the new namespace.
+
+No backend, database server, package manager, or heavy frontend framework (like React or Vue) is required.
 
 ***
 

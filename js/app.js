@@ -1,5 +1,7 @@
+(function(App) {
+    'use strict';
 // Global State
-window.appState = {
+Object.assign(App.state, {
     rawData: {},
     structuredData: {},
     layers: [],
@@ -16,7 +18,6 @@ window.appState = {
     sheetIFSC: {}
 };
 
-window.personallEnv = {};
 
 function loadEnv(callback) {
     fetch('.env')
@@ -41,12 +42,12 @@ function loadEnv(callback) {
                     env[key] = val;
                 }
             }
-            window.personallEnv = env;
+            App.env = env;
             // Merge into APP_CONFIG
-            window.APP_CONFIG = window.APP_CONFIG || {};
+            App.config = App.config || {};
             for (var k in env) {
                 if (env.hasOwnProperty(k)) {
-                    window.APP_CONFIG[k] = env[k];
+                    App.config[k] = env[k];
                 }
             }
             console.log("Environment variables loaded successfully from .env file:", Object.keys(env));
@@ -66,7 +67,7 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 
 
-window.personallFormatters = {
+App.formatters = {
     amount: function(value) {
         const num = Number(value);
         if (value === null || value === undefined || value === '' || isNaN(num)) return '—';
@@ -82,7 +83,6 @@ window.personallFormatters = {
     }
 };
 
-window.formatAmount = window.personallFormatters.amount;
 
 function setupDragAndDrop() {
     var dropZone = document.getElementById("drop-zone");
@@ -367,12 +367,12 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
     worker.onmessage = function (evt) {
         var response = evt.data;
         if (response.status === "success") {
-            window.appState.rawData = response.rawData;
-            window.appState.structuredData = response.structuredData;
-            window.appState.layers = response.layers;
-            window.appState.stats = response.stats;
-            window.appState.searchIndex = response.searchIndex;
-            window.appState.mindMapReady = false;
+            App.state.rawData = response.rawData;
+            App.state.structuredData = response.structuredData;
+            App.state.layers = response.layers;
+            App.state.stats = response.stats;
+            App.state.searchIndex = response.searchIndex;
+            App.state.mindMapReady = false;
             updateDashboardUI();
         } else {
             console.error("Worker parsing error:", response.error);
@@ -392,8 +392,8 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
 
     worker.postMessage({
         arrayBuffer: arrayBuffer,
-        primaryEntityPatterns: window.appState.primaryEntityPatterns,
-        layerPatterns: window.appState.layerPatterns
+        primaryEntityPatterns: App.state.primaryEntityPatterns,
+        layerPatterns: App.state.layerPatterns
     });
 }
 
@@ -432,15 +432,15 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
 
             setTimeout(function () {
                 try {
-                    var result = structureData(rawData, window.appState.layerPatterns, window.appState.primaryEntityPatterns);
+                    var result = structureData(rawData, App.state.layerPatterns, App.state.primaryEntityPatterns);
                     var searchIndex = buildSearchIndex(result.structuredData, result.layers);
 
-                    window.appState.rawData = rawData;
-                    window.appState.structuredData = result.structuredData;
-                    window.appState.layers = result.layers;
-                    window.appState.stats = result.stats;
-                    window.appState.searchIndex = searchIndex;
-                    window.appState.mindMapReady = false;
+                    App.state.rawData = rawData;
+                    App.state.structuredData = result.structuredData;
+                    App.state.layers = result.layers;
+                    App.state.stats = result.stats;
+                    App.state.searchIndex = searchIndex;
+                    App.state.mindMapReady = false;
 
                     updateDashboardUI();
                 } catch (error) {
@@ -485,7 +485,7 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
                     }
 
                     if (detectedIFSC) {
-                        window.appState.sheetIFSC[sn] = detectedIFSC;
+                        App.state.sheetIFSC[sn] = detectedIFSC;
                     }
 
                     var headers = rawRows[headerRowIndex].map(function (h) {
@@ -533,15 +533,15 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
 
             setTimeout(function () {
                 try {
-                    var result = structureData(mergedRawData, window.appState.layerPatterns, window.appState.primaryEntityPatterns);
+                    var result = structureData(mergedRawData, App.state.layerPatterns, App.state.primaryEntityPatterns);
                     var searchIndex = buildSearchIndex(result.structuredData, result.layers);
 
-                    window.appState.rawData = mergedRawData;
-                    window.appState.structuredData = result.structuredData;
-                    window.appState.layers = result.layers;
-                    window.appState.stats = result.stats;
-                    window.appState.searchIndex = searchIndex;
-                    window.appState.mindMapReady = false;
+                    App.state.rawData = mergedRawData;
+                    App.state.structuredData = result.structuredData;
+                    App.state.layers = result.layers;
+                    App.state.stats = result.stats;
+                    App.state.searchIndex = searchIndex;
+                    App.state.mindMapReady = false;
 
                     updateDashboardUI();
                 } catch (error) {
@@ -615,7 +615,7 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
                             mergedRawData[sheetKey] = { headers: headers, rows: dataRows };
 
                             if (detectedIFSC) {
-                                window.appState.sheetIFSC[sheetKey] = detectedIFSC;
+                                App.state.sheetIFSC[sheetKey] = detectedIFSC;
                             }
                         }
                     }
@@ -649,13 +649,13 @@ function updateDashboardUI() {
     var exportBtn = document.getElementById("export-word-btn");
     if (exportBtn) exportBtn.style.display = "inline-block";
 
-    document.getElementById("stat-layers").innerText = window.appState.stats.layers;
-    document.getElementById("stat-entities").innerText = window.appState.stats.entities;
-    document.getElementById("stat-txns").innerText = window.appState.stats.transactions;
+    document.getElementById("stat-layers").innerText = App.state.stats.layers;
+    document.getElementById("stat-entities").innerText = App.state.stats.entities;
+    document.getElementById("stat-txns").innerText = App.state.stats.transactions;
 
-    var totalAmt = window.appState.stats.totalAmount;
+    var totalAmt = App.state.stats.totalAmount;
     // Use the new shared formatter to keep amounts consistent across dashboard, graph, and export
-    document.getElementById("stat-amount").innerText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(totalAmt) : totalAmt;
+    document.getElementById("stat-amount").innerText = (App.formatters && App.formatters.amount) ? App.formatters.amount(totalAmt) : totalAmt;
 
     // --- DIAGNOSTICS & BULK RESOLUTION ---
     var diagnosticReport = {
@@ -665,21 +665,21 @@ function updateDashboardUI() {
         unclassifiedRows: 0
     };
 
-    var rawData = window.appState.rawData;
+    var rawData = App.state.rawData;
     Object.keys(rawData).forEach(function(sheetName) {
         var sheetData = rawData[sheetName];
         var rows = sheetData.rows || [];
         var headers = sheetData.headers || [];
 
         // Check columns
-        var layerCol = getColumnNameByPattern(headers, window.appState.layerPatterns);
-        var entityCol = getColumnNameByPattern(headers, window.appState.primaryEntityPatterns);
+        var layerCol = getColumnNameByPattern(headers, App.state.layerPatterns);
+        var entityCol = getColumnNameByPattern(headers, App.state.primaryEntityPatterns);
 
         var ifscFound = false;
         var ifscSource = 'none';
 
         // Check sheet metadata for IFSC
-        if (window.appState.sheetIFSC && window.appState.sheetIFSC[sheetName]) {
+        if (App.state.sheetIFSC && App.state.sheetIFSC[sheetName]) {
             ifscFound = true;
             ifscSource = 'sheet_metadata';
         } else {
@@ -716,7 +716,7 @@ function updateDashboardUI() {
             entityDetected: !!entityCol,
             ifscDetected: ifscFound,
             ifscSource: ifscSource,
-            virtualColumnShown: window.hasIFSCData ? window.hasIFSCData(sheetName) : ifscFound
+            virtualColumnShown: App.IFSC.hasIFSCData ? App.IFSC.hasIFSCData(sheetName) : ifscFound
         });
 
         // Collect unique IFSC codes across all rows using the global getter
@@ -726,9 +726,9 @@ function updateDashboardUI() {
                 diagnosticReport.unclassifiedRows++;
             }
 
-            if (window.getRowIFSC) {
-                var ifscVal = window.getRowIFSC(sheetName, row);
-                var code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+            if (App.IFSC.getRowIFSC) {
+                var ifscVal = App.IFSC.getRowIFSC(sheetName, row);
+                var code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
                 if (code) {
                     diagnosticReport.uniqueIFSCs.add(String(code).trim().toUpperCase());
                 }
@@ -740,8 +740,8 @@ function updateDashboardUI() {
     // This allows us to perform bulk resolution layer-by-layer sequentially.
     var layerGroups = []; // Array of { layerKey: string, ifscs: Array }
     var seenIFSCGlobal = {};
-    var layers = window.appState.layers || [];
-    var structured = window.appState.structuredData || {};
+    var layers = App.state.layers || [];
+    var structured = App.state.structuredData || {};
     
     for (var lii = 0; lii < layers.length; lii++) {
         var lk = layers[lii];
@@ -757,9 +757,9 @@ function updateDashboardUI() {
                 var rows = sheets[snames[si]];
                 if (!rows) continue;
                 for (var ri = 0; ri < rows.length; ri++) {
-                    if (window.getRowIFSC) {
-                        var ifscVal = window.getRowIFSC(snames[si], rows[ri]);
-                        var code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                    if (App.IFSC.getRowIFSC) {
+                        var ifscVal = App.IFSC.getRowIFSC(snames[si], rows[ri]);
+                        var code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
                         if (code) {
                             var c = String(code).trim().toUpperCase();
                             if (!seenIFSCGlobal[c]) {
@@ -781,7 +781,7 @@ function updateDashboardUI() {
     function resolveNextLayerGroup() {
         if (groupIndex >= layerGroups.length) {
             // Resolution complete. Tally stats based on cache.
-            var cache = window.ifscCache || {};
+            var cache = App.IFSC.getCache() || {};
             var allCodes = Object.keys(seenIFSCGlobal);
             allCodes.forEach(function(code) {
                 var item = cache[code];
@@ -802,8 +802,8 @@ function updateDashboardUI() {
         var group = layerGroups[groupIndex];
         console.log("Starting bulk IFSC resolution for: " + group.layerKey + " (" + group.ifscs.length + " unique codes)");
         
-        if (window.startBulkIFSCResolution && group.ifscs.length > 0) {
-            window.startBulkIFSCResolution(group.ifscs, function() {
+        if (App.IFSC.startBulkIFSCResolution && group.ifscs.length > 0) {
+            App.IFSC.startBulkIFSCResolution(group.ifscs, function() {
                 console.log("Completed bulk IFSC resolution for: " + group.layerKey);
                 groupIndex++;
                 resolveNextLayerGroup();
@@ -822,25 +822,25 @@ function updateDashboardUI() {
 
     // --- END DIAGNOSTICS ---
 
-    if (window.renderSidebarAndTables) {
-        window.renderSidebarAndTables();
+    if (App.Table.renderSidebarAndTables) {
+        App.Table.renderSidebarAndTables();
     }
 
     // Reset mind map — deferred until user clicks the tab
-    window.appState.mindMapReady = false;
-    if (window.appState.cy) {
-        window.appState.cy.destroy();
-        window.appState.cy = null;
+    App.state.mindMapReady = false;
+    if (App.state.cy) {
+        App.state.cy.destroy();
+        App.state.cy = null;
     }
     // If the graph tab is currently active, rebuild immediately
     var graphTab = document.querySelector('.tab-btn[data-target="graph-view"]');
-    if (graphTab && graphTab.classList.contains("active") && window.appState.layers.length > 0) {
+    if (graphTab && graphTab.classList.contains("active") && App.state.layers.length > 0) {
         var cyContainer = document.getElementById("cy");
         if (cyContainer) {
             cyContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#7f8c8d;font-size:14px;"><div class="spinner-small" style="margin-right:10px;"></div> Building graph...</div>';
         }
         setTimeout(function () {
-            if (window.initMindMap) window.initMindMap();
+            if (App.Graph.initMindMap) App.Graph.initMindMap();
         }, 50);
     }
 }
@@ -859,19 +859,21 @@ function setupTabs() {
 
             // Lazy mind-map init
             if (tab.dataset.target === "graph-view") {
-                if (!window.appState.mindMapReady && window.appState.layers.length > 0) {
+                if (!App.state.mindMapReady && App.state.layers.length > 0) {
                     var cy = document.getElementById("cy");
                     if (cy) {
                         cy.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#7f8c8d;font-size:14px;"><div class="spinner-small" style="margin-right:10px;"></div> Building graph...</div>';
                     }
                     setTimeout(function () {
-                        if (window.initMindMap) window.initMindMap();
+                        if (App.Graph.initMindMap) App.Graph.initMindMap();
                     }, 50);
-                } else if (window.appState.cy) {
-                    window.appState.cy.resize();
-                    window.appState.cy.fit();
+                } else if (App.state.cy) {
+                    App.state.cy.resize();
+                    App.state.cy.fit();
                 }
             }
         });
     });
 }
+
+})(window.PersonallApp);

@@ -1,8 +1,8 @@
+(function(App) {
+    'use strict';
+
+    var Export = App.Export || {};
 // Export Logic
-window.exportState = {
-    selections: {}, // { sheetName: [selected columns] }
-    isGenerating: false
-};
 
 const yieldToMainThread = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -78,12 +78,12 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function generateWordDocument() {
-    if (window.exportState.isGenerating) return;
+    if (App.state.isExportGenerating) return;
 
     const loadingUI = document.getElementById("export-loading");
     const generateBtn = document.getElementById("generate-word-btn");
 
-    window.exportState.isGenerating = true;
+    App.state.isExportGenerating = true;
     if (loadingUI) {
         loadingUI.style.display = "flex";
         loadingUI.innerHTML = `<div class="spinner-small"></div> Generating Document (<span id="export-progress">0%</span>)...`;
@@ -95,8 +95,8 @@ async function generateWordDocument() {
         try {
             // Pre-resolve selected IFSC codes
             const ifscSet = new Set();
-            const selections = window.exportState.selections;
-            const rawData = window.appState.rawData;
+            const selections = App.state.exportSelections;
+            const rawData = App.state.rawData;
 
             Object.keys(rawData).forEach(sheetName => {
                 const selectedCols = selections[sheetName] || [];
@@ -104,9 +104,9 @@ async function generateWordDocument() {
 
                 const rows = rawData[sheetName].rows || [];
                 rows.forEach(row => {
-                    const ifscVal = window.getRowIFSC(sheetName, row);
-                    const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
-                    if (code && (!window.ifscCache || !window.ifscCache[code])) {
+                    const ifscVal = App.IFSC.getRowIFSC(sheetName, row);
+                    const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                    if (code && (!App.IFSC.getCache() || !App.IFSC.getCache()[code])) {
                         ifscSet.add(code);
                     }
                 });
@@ -119,7 +119,7 @@ async function generateWordDocument() {
                         loadingUI.innerHTML = `<div class="spinner-small"></div> Resolving bank addresses (${i + 1}/${ifscList.length})...`;
                     }
                     await new Promise(resolve => {
-                        window.lookupIFSC(ifscList[i], function() {
+                        App.IFSC.lookupIFSC(ifscList[i], function() {
                             resolve();
                         });
                     });
@@ -147,7 +147,7 @@ async function generateWordDocument() {
             console.error("Failed to generate Word document:", error);
             alert("An error occurred while generating the document. Check console for details.");
         } finally {
-            window.exportState.isGenerating = false;
+            App.state.isExportGenerating = false;
             if (loadingUI) loadingUI.style.display = "none";
             if (generateBtn) generateBtn.disabled = false;
         }
@@ -156,8 +156,8 @@ async function generateWordDocument() {
 
 async function buildDocxObject() {
     const docSections = [];
-    const selections = window.exportState.selections;
-    const structuredData = window.appState.structuredData;
+    const selections = App.state.exportSelections;
+    const structuredData = App.state.structuredData;
 
     // Helper formatting functions for Word styling
     const createHeading = (text, level = 1) => {
@@ -223,10 +223,10 @@ async function buildDocxObject() {
                     children: headers.map(header => {
                         let cellText = "";
                         if (header === "Bank Branch & Address") {
-                            const ifscVal = window.getRowIFSC(sheetName, rowObj);
-                            const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                            const ifscVal = App.IFSC.getRowIFSC(sheetName, rowObj);
+                            const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
                             if (code) {
-                                cellText = window.getIFSCCachedSync(code).address;
+                                cellText = App.IFSC.getIFSCCachedSync(code).address;
                             } else {
                                 cellText = "—";
                             }
@@ -280,10 +280,10 @@ async function buildDocxObject() {
                         children: headers.map(header => {
                             let cellText = "";
                             if (header === "Bank Branch & Address") {
-                                const ifscVal = window.getRowIFSC(sheetName, rowObj);
-                                const code = window.safeExtractIFSC ? window.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                                const ifscVal = App.IFSC.getRowIFSC(sheetName, rowObj);
+                                const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
                                 if (code) {
-                                    const cached = window.getIFSCCachedSync(code);
+                                    const cached = App.IFSC.getIFSCCachedSync(code);
                                     cellText = cached.address;
                                     if (cached.status === 'fallback') {
                                         cellText = "Address unavailable — offline lookup failed (" + cached.bank + ")";
@@ -292,7 +292,7 @@ async function buildDocxObject() {
                                     cellText = "-";
                                 }
                             } else if (header.toLowerCase().includes("amount") && typeof rowObj[header] !== 'undefined') {
-                                cellText = (window.personallFormatters && window.personallFormatters.amount) ? window.personallFormatters.amount(rowObj[header]) : String(rowObj[header] !== null ? rowObj[header] : "—");
+                                cellText = (App.formatters && App.formatters.amount) ? App.formatters.amount(rowObj[header]) : String(rowObj[header] !== null ? rowObj[header] : "—");
                             } else {
                                 cellText = String(rowObj[header] !== null && rowObj[header] !== undefined ? rowObj[header] : '');
                             }
@@ -323,7 +323,7 @@ async function buildDocxObject() {
 
     // Calculate total entities to process for progress tracking
     let totalSteps = 0;
-    window.appState.layers.forEach(layerKey => {
+    App.state.layers.forEach(layerKey => {
         if (layerKey === "Unclassified Data") return;
         totalSteps += Object.keys(structuredData[layerKey] || {}).length;
     });
@@ -341,7 +341,7 @@ async function buildDocxObject() {
     };
 
     // 1. Process Classified Data Hierarchy
-    for (const layerKey of window.appState.layers) {
+    for (const layerKey of App.state.layers) {
         if (layerKey === "Unclassified Data") continue;
 
         const entities = structuredData[layerKey] || {};
@@ -361,8 +361,8 @@ async function buildDocxObject() {
                 if (rows.length === 0) continue;
 
                 // Group by receiver
-                const originalHeaders = window.appState.rawData[sheetName].headers;
-                const primaryPatterns = window.appState.primaryEntityPatterns || [];
+                const originalHeaders = App.state.rawData[sheetName].headers;
+                const primaryPatterns = App.state.primaryEntityPatterns || [];
                 const entityCol = originalHeaders.find(k => {
                     const kl = k.toLowerCase();
                     return primaryPatterns.some(p => kl.includes(p));
@@ -507,7 +507,7 @@ function loadSelections() {
     try {
         const saved = localStorage.getItem('personall_export_selections');
         if (saved) {
-            window.exportState.selections = JSON.parse(saved);
+            App.state.exportSelections = JSON.parse(saved);
         }
     } catch (e) {
         console.error("Failed to load selections", e);
@@ -523,7 +523,7 @@ function saveSelections() {
             selections[sheetName].push(cb.value);
         });
     });
-    window.exportState.selections = selections;
+    App.state.exportSelections = selections;
     try {
         localStorage.setItem('personall_export_selections', JSON.stringify(selections));
     } catch (e) {
@@ -541,8 +541,8 @@ function applyPreset(presetType) {
             } else if (presetType === 'summary') {
                 const valLower = cb.value.toLowerCase();
                 const isImportant =
-                    window.appState.primaryEntityPatterns.some(p => valLower.includes(p)) ||
-                    window.appState.layerPatterns.some(p => valLower.includes(p)) ||
+                    App.state.primaryEntityPatterns.some(p => valLower.includes(p)) ||
+                    App.state.layerPatterns.some(p => valLower.includes(p)) ||
                     valLower.includes('amount') || valLower.includes('date') ||
                     valLower.includes('utr') || valLower.includes('txn') || valLower.includes('remarks');
                 cb.checked = isImportant;
@@ -561,7 +561,7 @@ function renderExportModal() {
     const container = document.getElementById("export-sheets-container");
     container.innerHTML = "";
 
-    const rawData = window.appState.rawData;
+    const rawData = App.state.rawData;
     if (!rawData || Object.keys(rawData).length === 0) {
         container.innerHTML = "<p>No data available to export.</p>";
         return;
@@ -569,7 +569,7 @@ function renderExportModal() {
 
     // Check classified sheets
     const classifiedSheets = new Set();
-    const structuredData = window.appState.structuredData;
+    const structuredData = App.state.structuredData;
 
     Object.keys(structuredData).forEach(layer => {
         if (layer === "Unclassified Data") return;
@@ -598,7 +598,7 @@ function renderExportModal() {
         const colsDiv = document.createElement("div");
         colsDiv.className = "export-sheet-columns";
 
-        const savedCols = window.exportState.selections[sheetName];
+        const savedCols = App.state.exportSelections[sheetName];
 
         headers.forEach(header => {
             // Default to checked if no saved configurations exist
@@ -641,7 +641,7 @@ function renderExportModal() {
         else hasClassified = true;
 
         const displayedHeaders = [].concat(headers);
-        const hasIFSC = window.hasIFSCData(sheetName);
+        const hasIFSC = App.IFSC.hasIFSCData(sheetName);
         if (hasIFSC) {
             displayedHeaders.push("Bank Branch & Address");
         }
@@ -739,7 +739,7 @@ function updateSummary() {
     let colsSelected = 0;
     let rowsToExport = 0;
 
-    const rawData = window.appState.rawData;
+    const rawData = App.state.rawData;
 
     document.querySelectorAll('.export-sheet-group').forEach(group => {
         const sheetName = group.dataset.sheet;
@@ -766,7 +766,14 @@ function updateSummary() {
         if (generateBtn) generateBtn.disabled = true;
         if (warningText) warningText.style.display = "block";
     } else {
-        if (generateBtn && !window.exportState.isGenerating) generateBtn.disabled = false;
+        if (generateBtn && !App.state.isExportGenerating) generateBtn.disabled = false;
         if (warningText) warningText.style.display = "none";
     }
 }
+
+    // Expose methods
+    Export.exportDocument = exportDocument;
+    Export.openExportModal = openExportModal;
+
+    App.Export = Export;
+})(window.PersonallApp);

@@ -1,14 +1,18 @@
+(function(App) {
+    'use strict';
+
+    var Graph = App.Graph || {};
 // Mind map and graph visualization logic using Cytoscape.js
-window.initMindMap = function() {
+function initMindMap() {
     try {
-        if (window.appState.cy) {
-            window.appState.cy.destroy();
+        if (App.state.cy) {
+            App.state.cy.destroy();
         }
 
-        var totalTxns = window.appState.stats ? window.appState.stats.transactions : 0;
+        var totalTxns = App.state.stats ? App.state.stats.transactions : 0;
         var threshold = 500;
         var isOverThreshold = totalTxns > threshold;
-        var aggregateMode = isOverThreshold && !window.appState.forceFullGraph;
+        var aggregateMode = isOverThreshold && !App.state.forceFullGraph;
 
         var banner = document.getElementById("graph-perf-banner");
         if (banner) {
@@ -17,14 +21,14 @@ window.initMindMap = function() {
                 if (aggregateMode) {
                     banner.innerHTML = '<span><strong>Performance Mode Active:</strong> Similar terminal transactions and duplicate transfers are grouped (' + totalTxns + ' total transactions).</span><button id="btn-force-full-graph">Show Full Graph</button>';
                     document.getElementById("btn-force-full-graph").addEventListener("click", function () {
-                        window.appState.forceFullGraph = true;
-                        window.initMindMap();
+                        App.state.forceFullGraph = true;
+                        initMindMap();
                     });
                 } else {
                     banner.innerHTML = '<span><strong>Full Graph Mode Active:</strong> All ' + totalTxns + ' transactions rendered.</span><button id="btn-reset-perf-graph">Switch to Aggregated</button>';
                     document.getElementById("btn-reset-perf-graph").addEventListener("click", function () {
-                        window.appState.forceFullGraph = false;
-                        window.initMindMap();
+                        App.state.forceFullGraph = false;
+                        initMindMap();
                     });
                 }
             } else {
@@ -195,7 +199,7 @@ window.initMindMap = function() {
             cy.center();
         });
 
-        window.appState.cy = cy;
+        App.state.cy = cy;
 
         // Hover effects — scale up entity on mouseover for discoverability
         cy.on('mouseover', 'node[type="entity"]', function(evt) {
@@ -213,8 +217,8 @@ window.initMindMap = function() {
             var node = evt.target;
             if (node.data('type') === 'entity') {
                 document.getElementById('global-search').value = node.data('id');
-                if (window.performSearch) {
-                    window.performSearch();
+                if (App.Table && App.Table.performSearch) {
+                    App.Table.performSearch();
                 }
                 document.querySelector('.tab-btn[data-target="table-view"]').click();
             }
@@ -224,18 +228,18 @@ window.initMindMap = function() {
         var activeLi = document.querySelector('#layer-navigator li.active');
         if (activeLi) {
             var layerKey = activeLi.childNodes[0].textContent.trim();
-            window.highlightLayerInGraph(cy, layerKey);
+            highlightLayerInGraph(cy, layerKey);
         }
-        window.appState.mindMapReady = true;
+        App.state.mindMapReady = true;
     } catch(e) {
         console.error("MindMap init error:", e);
-        window.appState.mindMapReady = false;
+        App.state.mindMapReady = false;
         var cyEl = document.getElementById('cy');
         if (cyEl) cyEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#e74c3c;font-size:14px;">Graph Error: ' + e.message + '</div>';
     }
 };
 
-window.highlightLayerInGraph = function(cy, layerKey) {
+function highlightLayerInGraph(cy, layerKey) {
     if (!cy) return;
 
     cy.elements().style({
@@ -243,8 +247,8 @@ window.highlightLayerInGraph = function(cy, layerKey) {
         'overlay-opacity': 0
     });
 
-    if (layerKey && window.appState && window.appState.layers) {
-        var expectedIdx = window.appState.layers.indexOf(layerKey) + 1;
+    if (layerKey && App.state && App.state.layers) {
+        var expectedIdx = App.state.layers.indexOf(layerKey) + 1;
         var selectedNodes = cy.nodes().filter(function(n) {
             var nodeLayerIdx = n.data('layer');
             return nodeLayerIdx === expectedIdx || (layerKey === "Unclassified Data" && n.data('layerStr') === "Unclassified Data");
@@ -267,7 +271,7 @@ function isSheetMoneyTransfer(sheetName, sampleRow) {
 
     var rowKeys = Object.keys(sampleRow);
     var entityCol = null;
-    var primaryPatterns = window.appState.primaryEntityPatterns || [];
+    var primaryPatterns = App.state.primaryEntityPatterns || [];
 
     // Find primary entity column in this row
     for (var i = 0; i < rowKeys.length; i++) {
@@ -302,9 +306,9 @@ function isSheetMoneyTransfer(sheetName, sampleRow) {
 
 function generateGraphElements(aggregateMode) {
     var elements = { nodes: [], edges: [] };
-    var structured = window.appState.structuredData;
-    var layers = window.appState.layers;
-    var query = window.lastSearchQuery || "";
+    var structured = App.state.structuredData;
+    var layers = App.state.layers;
+    var query = App.state.lastSearchQuery || "";
     if (!structured || !layers || !layers.length) return elements;
 
     var addedNodes = {};
@@ -321,7 +325,7 @@ function generateGraphElements(aggregateMode) {
             entityCol: null,
             amountCol: null,
             receiverCol: null,
-            patterns: window.appState.primaryEntityPatterns || []
+            patterns: App.state.primaryEntityPatterns || []
         };
         // Find entity column
         for (var i = 0; i < rowKeys.length; i++) {
@@ -577,7 +581,7 @@ function getLayoutOptions(isSwimlane) {
         return {
             name: 'concentric',
             concentric: function(node) {
-                var maxLayer = window.appState.layers.length + 1;
+                var maxLayer = App.state.layers.length + 1;
                 return maxLayer - (node.data('layer') || 1);
             },
             levelWidth: function() {
@@ -593,7 +597,7 @@ function getLayoutOptions(isSwimlane) {
 
 // Delegated to global app.js for consistency via localFormatAmount to avoid global collisions
 function localFormatAmount(val) {
-    if (window.personallFormatters && window.personallFormatters.amount) return window.personallFormatters.amount(val);
+    if (App.formatters && App.formatters.amount) return App.formatters.amount(val);
     return val;
 }
 
@@ -607,9 +611,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var layoutToggle = document.getElementById("toggle-layout");
     if (layoutToggle) {
         layoutToggle.addEventListener("change", function (e) {
-            if (window.appState && window.appState.cy) {
+            if (App.state && App.state.cy) {
                 var isSwimlane = e.target.checked;
-                var layout = window.appState.cy.layout(getLayoutOptions(isSwimlane));
+                var layout = App.state.cy.layout(getLayoutOptions(isSwimlane));
                 layout.run();
             }
         });
@@ -619,8 +623,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnZoomIn = document.getElementById("btn-zoom-in");
     if (btnZoomIn) {
         btnZoomIn.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.zoom(window.appState.cy.zoom() * 1.3);
+            if (App.state && App.state.cy) {
+                App.state.cy.zoom(App.state.cy.zoom() * 1.3);
             }
         });
     }
@@ -628,8 +632,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnZoomOut = document.getElementById("btn-zoom-out");
     if (btnZoomOut) {
         btnZoomOut.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.zoom(window.appState.cy.zoom() / 1.3);
+            if (App.state && App.state.cy) {
+                App.state.cy.zoom(App.state.cy.zoom() / 1.3);
             }
         });
     }
@@ -637,9 +641,9 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnZoomFit = document.getElementById("btn-zoom-fit");
     if (btnZoomFit) {
         btnZoomFit.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.fit(undefined, 30);
-                window.appState.cy.center();
+            if (App.state && App.state.cy) {
+                App.state.cy.fit(undefined, 30);
+                App.state.cy.center();
             }
         });
     }
@@ -653,10 +657,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 var isFullscreen = graphView.classList.toggle("fullscreen");
                 btnFullscreen.classList.toggle("active", isFullscreen);
                 setTimeout(function() {
-                    if (window.appState && window.appState.cy) {
-                        window.appState.cy.resize();
-                        window.appState.cy.fit(undefined, 30);
-                        window.appState.cy.center();
+                    if (App.state && App.state.cy) {
+                        App.state.cy.resize();
+                        App.state.cy.fit(undefined, 30);
+                        App.state.cy.center();
                     }
                 }, 100);
             }
@@ -668,8 +672,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnPanUp = document.getElementById("btn-pan-up");
     if (btnPanUp) {
         btnPanUp.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.panBy({ x: 0, y: panDistance });
+            if (App.state && App.state.cy) {
+                App.state.cy.panBy({ x: 0, y: panDistance });
             }
         });
     }
@@ -677,8 +681,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnPanDown = document.getElementById("btn-pan-down");
     if (btnPanDown) {
         btnPanDown.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.panBy({ x: 0, y: -panDistance });
+            if (App.state && App.state.cy) {
+                App.state.cy.panBy({ x: 0, y: -panDistance });
             }
         });
     }
@@ -686,8 +690,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnPanLeft = document.getElementById("btn-pan-left");
     if (btnPanLeft) {
         btnPanLeft.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.panBy({ x: panDistance, y: 0 });
+            if (App.state && App.state.cy) {
+                App.state.cy.panBy({ x: panDistance, y: 0 });
             }
         });
     }
@@ -695,8 +699,8 @@ document.addEventListener("DOMContentLoaded", function () {
     var btnPanRight = document.getElementById("btn-pan-right");
     if (btnPanRight) {
         btnPanRight.addEventListener("click", function() {
-            if (window.appState && window.appState.cy) {
-                window.appState.cy.panBy({ x: -panDistance, y: 0 });
+            if (App.state && App.state.cy) {
+                App.state.cy.panBy({ x: -panDistance, y: 0 });
             }
         });
     }
@@ -705,11 +709,18 @@ document.addEventListener("DOMContentLoaded", function () {
     var graphView = document.getElementById("graph-view");
     if (graphView) {
         var observer = new MutationObserver(function () {
-            if (graphView.style.display !== "none" && window.appState && window.appState.cy) {
-                window.appState.cy.resize();
-                window.appState.cy.fit(undefined, 30);
+            if (graphView.style.display !== "none" && App.state && App.state.cy) {
+                App.state.cy.resize();
+                App.state.cy.fit(undefined, 30);
             }
         });
         observer.observe(graphView, { attributes: true, attributeFilter: ["style", "class"] });
     }
 });
+
+    // Expose methods
+    Graph.initMindMap = initMindMap;
+    Graph.highlightLayerInGraph = highlightLayerInGraph;
+
+    App.Graph = Graph;
+})(window.PersonallApp);
