@@ -2,6 +2,32 @@
     'use strict';
 
     var Table = App.Table || {};
+
+// Guarded IFSC accessors — the table view must keep working even if the
+// IFSC module failed to initialize (e.g. corrupt localStorage cache).
+function ifscHasData(sheetName) {
+    return !!(App.IFSC && App.IFSC.hasIFSCData && App.IFSC.hasIFSCData(sheetName));
+}
+function ifscGetRowIFSC(sheetName, row) {
+    return (App.IFSC && App.IFSC.getRowIFSC) ? App.IFSC.getRowIFSC(sheetName, row) : null;
+}
+function ifscExtractCode(ifscVal) {
+    if (App.IFSC && App.IFSC.safeExtractIFSC) return App.IFSC.safeExtractIFSC(ifscVal);
+    if (ifscVal && ifscVal.code) return ifscVal.code;
+    if (typeof ifscVal === 'string') return ifscVal;
+    return null;
+}
+function ifscGetCache() {
+    return (App.IFSC && App.IFSC.getCache) ? App.IFSC.getCache() : {};
+}
+function ifscLookup(code, cb) {
+    if (App.IFSC && App.IFSC.lookupIFSC) {
+        App.IFSC.lookupIFSC(code, cb);
+        return;
+    }
+    if (cb) cb({ address: '-', bank: '-', branch: '-', status: 'error' });
+}
+
 // Table rendering and filtering logic
 function renderSidebarAndTables() {
     const layers = App.state.layers;
@@ -198,7 +224,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
         table.className = "data-table";
 
         const originalHeaders = App.state.rawData[sheetName].headers;
-        const hasIFSC = App.IFSC.hasIFSCData(sheetName);
+        const hasIFSC = ifscHasData(sheetName);
 
         const thead = document.createElement("thead");
         const trHead = document.createElement("tr");
@@ -268,12 +294,12 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                 if (hasIFSC) {
                     const tdAddr = document.createElement("td");
                     tdAddr.className = "resolved-address-cell";
-                    const ifscVal = App.IFSC.getRowIFSC(sheetName, row);
-                    const clean = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                    const ifscVal = ifscGetRowIFSC(sheetName, row);
+                    const clean = ifscExtractCode(ifscVal);
 
                     if (clean) {
                         const cleanUpper = String(clean).trim().toUpperCase();
-                        const cached = App.IFSC.getCache() && App.IFSC.getCache()[cleanUpper];
+                        const cached = ifscGetCache()[cleanUpper];
 
                         let addressHtml = "";
                         if (cached && cached.status === 'resolved') {
@@ -309,10 +335,10 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                         const code = this.dataset.ifsc;
                         this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
                         // Delete fallback from cache to force network call
-                        if (App.IFSC.getCache() && App.IFSC.getCache()[code]) {
-                            delete App.IFSC.getCache()[code];
+                        if (ifscGetCache()[code]) {
+                            delete ifscGetCache()[code];
                         }
-                        App.IFSC.lookupIFSC(code, function(details) {
+                        ifscLookup(code, function(details) {
                             // Re-render page to show new value
                             table.renderPage();
                         });
@@ -322,7 +348,7 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
 
             // Trigger resolution for cells that need it (if any were not already cached or falling back)
             ifscCellsToUpdate.forEach(item => {
-                App.IFSC.lookupIFSC(item.ifsc, function(details) {
+                ifscLookup(item.ifsc, function(details) {
                     // Update cell if still in DOM
                     if (document.body.contains(item.td)) {
                         let html = details.address;
@@ -342,8 +368,8 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
                                     e.preventDefault();
                                     const code = this.dataset.ifsc;
                                     this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                                    if (App.IFSC.getCache() && App.IFSC.getCache()[code]) delete App.IFSC.getCache()[code];
-                                    App.IFSC.lookupIFSC(code, function() { table.renderPage(); });
+                                    if (ifscGetCache()[code]) delete ifscGetCache()[code];
+                                    ifscLookup(code, function() { table.renderPage(); });
                                 });
                             }
                         }
@@ -718,6 +744,7 @@ function setupSearchFilter() {
     // Expose methods
     Table.renderSidebarAndTables = renderSidebarAndTables;
     Table.jumpToLayerFromSearch = jumpToLayerFromSearch;
+    Table.performSearch = performSearch;
 
     App.Table = Table;
 })(window.PersonallApp);

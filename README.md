@@ -500,7 +500,7 @@ If `Bank Branch & Address` is selected:
 
 ## Performance
 
-The application is designed for workbooks up to approximately 10 MB, subject to browser memory and workbook complexity.
+The application is designed for workbooks up to approximately 15 MB, subject to browser memory and workbook complexity.
 
 Performance features include:
 
@@ -568,7 +568,7 @@ Try:
 - Keep only necessary browser tabs open.
 - Use table view instead of full graph view for very large workbooks.
 - Allow performance mode to aggregate graph elements.
-- Use a device with more available memory for files approaching 10 MB.
+- Use a device with more available memory for files approaching 15 MB.
 
 ### Search Shows No Result in Current Layer
 

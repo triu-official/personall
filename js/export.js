@@ -4,6 +4,34 @@
     var Export = App.Export || {};
 // Export Logic
 
+// Guarded IFSC accessors — export must never hard-crash if the IFSC module
+// is unavailable (defensive, mirrors table.js).
+function ifscGetRowIFSC(sheetName, row) {
+    return (App.IFSC && App.IFSC.getRowIFSC) ? App.IFSC.getRowIFSC(sheetName, row) : null;
+}
+function ifscExtractCode(ifscVal) {
+    if (App.IFSC && App.IFSC.safeExtractIFSC) return App.IFSC.safeExtractIFSC(ifscVal);
+    if (ifscVal && ifscVal.code) return ifscVal.code;
+    if (typeof ifscVal === 'string') return ifscVal;
+    return null;
+}
+function ifscGetCache() {
+    return (App.IFSC && App.IFSC.getCache) ? (App.IFSC.getCache() || {}) : {};
+}
+function ifscLookup(code, cb) {
+    if (App.IFSC && App.IFSC.lookupIFSC) {
+        App.IFSC.lookupIFSC(code, cb);
+        return;
+    }
+    if (cb) cb({ address: '-', bank: '-', branch: '-', status: 'error' });
+}
+function ifscHasData(sheetName) {
+    return !!(App.IFSC && App.IFSC.hasIFSCData && App.IFSC.hasIFSCData(sheetName));
+}
+function ifscGetIFSCCachedSync(code) {
+    return (App.IFSC && App.IFSC.getIFSCCachedSync) ? App.IFSC.getIFSCCachedSync(code) : null;
+}
+
 const yieldToMainThread = () => new Promise(resolve => setTimeout(resolve, 0));
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -104,9 +132,9 @@ async function generateWordDocument() {
 
                 const rows = rawData[sheetName].rows || [];
                 rows.forEach(row => {
-                    const ifscVal = App.IFSC.getRowIFSC(sheetName, row);
-                    const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
-                    if (code && (!App.IFSC.getCache() || !App.IFSC.getCache()[code])) {
+                    const ifscVal = ifscGetRowIFSC(sheetName, row);
+                    const code = ifscExtractCode(ifscVal);
+                    if (code && !ifscGetCache()[code]) {
                         ifscSet.add(code);
                     }
                 });
@@ -119,7 +147,7 @@ async function generateWordDocument() {
                         loadingUI.innerHTML = `<div class="spinner-small"></div> Resolving bank addresses (${i + 1}/${ifscList.length})...`;
                     }
                     await new Promise(resolve => {
-                        App.IFSC.lookupIFSC(ifscList[i], function() {
+                        ifscLookup(ifscList[i], function() {
                             resolve();
                         });
                     });
@@ -223,10 +251,10 @@ async function buildDocxObject() {
                     children: headers.map(header => {
                         let cellText = "";
                         if (header === "Bank Branch & Address") {
-                            const ifscVal = App.IFSC.getRowIFSC(sheetName, rowObj);
-                            const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
-                            if (code) {
-                                cellText = App.IFSC.getIFSCCachedSync(code).address;
+                            const ifscVal = ifscGetRowIFSC(sheetName, rowObj);
+                            const code = ifscExtractCode(ifscVal);
+                            if (code && ifscGetIFSCCachedSync(code)) {
+                                cellText = ifscGetIFSCCachedSync(code).address;
                             } else {
                                 cellText = "—";
                             }
@@ -280,12 +308,12 @@ async function buildDocxObject() {
                         children: headers.map(header => {
                             let cellText = "";
                             if (header === "Bank Branch & Address") {
-                                const ifscVal = App.IFSC.getRowIFSC(sheetName, rowObj);
-                                const code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                                const ifscVal = ifscGetRowIFSC(sheetName, rowObj);
+                                const code = ifscExtractCode(ifscVal);
                                 if (code) {
-                                    const cached = App.IFSC.getIFSCCachedSync(code);
-                                    cellText = cached.address;
-                                    if (cached.status === 'fallback') {
+                                    const cached = ifscGetIFSCCachedSync(code);
+                                    cellText = cached ? cached.address : "-";
+                                    if (cached && cached.status === 'fallback') {
                                         cellText = "Address unavailable — offline lookup failed (" + cached.bank + ")";
                                     }
                                 } else {
@@ -507,10 +535,13 @@ function loadSelections() {
     try {
         const saved = localStorage.getItem('personall_export_selections');
         if (saved) {
-            App.state.exportSelections = JSON.parse(saved);
+            App.state.exportSelections = JSON.parse(saved) || {};
         }
     } catch (e) {
         console.error("Failed to load selections", e);
+    }
+    if (!App.state.exportSelections) {
+        App.state.exportSelections = {};
     }
 }
 
@@ -641,7 +672,7 @@ function renderExportModal() {
         else hasClassified = true;
 
         const displayedHeaders = [].concat(headers);
-        const hasIFSC = App.IFSC.hasIFSCData(sheetName);
+        const hasIFSC = ifscHasData(sheetName);
         if (hasIFSC) {
             displayedHeaders.push("Bank Branch & Address");
         }
@@ -772,8 +803,8 @@ function updateSummary() {
 }
 
     // Expose methods
-    Export.exportDocument = exportDocument;
-    Export.openExportModal = openExportModal;
+    Export.exportDocument = generateWordDocument;
+    Export.openExportModal = renderExportModal;
 
     App.Export = Export;
 })(window.PersonallApp);

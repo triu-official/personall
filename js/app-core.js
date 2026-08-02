@@ -30,6 +30,7 @@
             isExportGenerating: false,
             lastSearchQuery: ""
         },
+        config: window.APP_CONFIG || {},
         env: {},
         formatters: {
             amount: function(val) {

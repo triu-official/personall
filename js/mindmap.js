@@ -60,7 +60,7 @@ function initMindMap() {
                 selector: 'node[type="entity"]',
                 style: {
                     'label': 'data(label)',
-                    'color': '#ffffff',
+                    'color': '#2c3e50',
                     'font-size': '14px',
                     'font-weight': 'bold',
                     'text-valign': 'bottom',
@@ -77,12 +77,14 @@ function initMindMap() {
         ];
 
         // Add per-layer selectors to dynamicStyle (avoiding ES6 spread operator)
-        for (var lIdx = 0; lIdx < layerColors.length; lIdx++) {
+        var activeLayersCount = App.state.layers ? App.state.layers.length : 0;
+        for (var lIdx = 0; lIdx < Math.max(activeLayersCount, layerColors.length); lIdx++) {
+            var color = layerColors[lIdx % layerColors.length];
             dynamicStyle.push({
                 selector: 'node[type="entity"][layer=' + (lIdx + 1) + ']',
                 style: {
-                    'background-color': layerColors[lIdx],
-                    'border-color': layerColors[lIdx]
+                    'background-color': color,
+                    'border-color': color
                 }
             });
         }
@@ -185,7 +187,6 @@ function initMindMap() {
             container: cyContainer,
             elements: elements,
             style: dynamicStyle,
-            layout: getLayoutOptions(document.getElementById("toggle-layout") ? document.getElementById("toggle-layout").checked : false),
             minZoom: 0.0005,
             maxZoom: 5,
             wheelSensitivity: 0.5
@@ -194,10 +195,16 @@ function initMindMap() {
         cy.resize();
 
         // Fit the graph to the viewport after layout completes
+        // We set up the listener before running layout to ensure it's not missed
+        var isSwimlane = document.getElementById("toggle-layout") ? document.getElementById("toggle-layout").checked : false;
+        var layout = cy.layout(getLayoutOptions(isSwimlane));
+
         cy.one('layoutstop', function() {
             cy.fit(undefined, 30);
             cy.center();
         });
+
+        layout.run();
 
         App.state.cy = cy;
 
@@ -613,6 +620,10 @@ document.addEventListener("DOMContentLoaded", function () {
         layoutToggle.addEventListener("change", function (e) {
             if (App.state && App.state.cy) {
                 var isSwimlane = e.target.checked;
+                App.state.cy.one('layoutstop', function() {
+                    App.state.cy.fit(undefined, 30);
+                    App.state.cy.center();
+                });
                 var layout = App.state.cy.layout(getLayoutOptions(isSwimlane));
                 layout.run();
             }
@@ -709,7 +720,7 @@ document.addEventListener("DOMContentLoaded", function () {
     var graphView = document.getElementById("graph-view");
     if (graphView) {
         var observer = new MutationObserver(function () {
-            if (graphView.style.display !== "none" && App.state && App.state.cy) {
+            if (graphView.classList.contains("active") && App.state && App.state.cy) {
                 App.state.cy.resize();
                 App.state.cy.fit(undefined, 30);
             }

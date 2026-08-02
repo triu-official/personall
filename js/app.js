@@ -16,7 +16,7 @@ Object.assign(App.state, {
     primaryEntityPatterns: ["account no", "wallet", "pg", "pa", "id", "account no./(wallet/pg/pa) id"],
     layerPatterns: ["layer", "layer no", "lyr"],
     sheetIFSC: {}
-};
+});
 
 
 function loadEnv(callback) {
@@ -238,6 +238,11 @@ function buildSearchIndex(structuredData, layers) {
 // File upload handler — supports multiple .xlsx files
 // ---------------------------------------------------------------
 function handleFiles(fileList) {
+    // Reset per-upload state so a second upload never inherits stale data
+    // from the previous workbook (sheet IFSC metadata, full-graph toggle).
+    App.state.sheetIFSC = {};
+    App.state.forceFullGraph = false;
+
     var files = [];
     for (var fi = 0; fi < fileList.length; fi++) {
         if (fileList[fi].name.endsWith(".xlsx")) files.push(fileList[fi]);
@@ -331,7 +336,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
         "self.onmessage = function(e) {\n" +
         "  var d = e.data;\n" +
         "  try {\n" +
-        "    var wb = XLSX.read(d.arrayBuffer, { type: 'array' });\n" +
+        "    var wb = XLSX.read(d.arrayBuffer, { type: 'array', cellFormula: false, cellHTML: false, cellStyles: false });\n" +
         "    var raw = {};\n" +
         "    wb.SheetNames.forEach(function(sn) {\n" +
         "      var sh = wb.Sheets[sn];\n" +
@@ -408,7 +413,7 @@ function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
     setTimeout(function () {
         try {
             var data = new Uint8Array(arrayBuffer);
-            var workbook = XLSX.read(data, { type: "array" });
+            var workbook = XLSX.read(data, { type: "array", cellFormula: false, cellHTML: false, cellStyles: false });
             processWorkbookAsync(workbook, localLoading, globalLoading);
         } catch (error) {
             console.error("Error parsing workbook on main thread:", error);
@@ -562,7 +567,7 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
         setTimeout(function () {
             try {
                 var data = new Uint8Array(fileInfo.buffer);
-                var workbook = XLSX.read(data, { type: "array" });
+                var workbook = XLSX.read(data, { type: "array", cellFormula: false, cellHTML: false, cellStyles: false });
 
                 workbook.SheetNames.forEach(function (sn) {
                     var sheet = workbook.Sheets[sn];
@@ -781,7 +786,7 @@ function updateDashboardUI() {
     function resolveNextLayerGroup() {
         if (groupIndex >= layerGroups.length) {
             // Resolution complete. Tally stats based on cache.
-            var cache = App.IFSC.getCache() || {};
+            var cache = (App.IFSC && App.IFSC.getCache) ? (App.IFSC.getCache() || {}) : {};
             var allCodes = Object.keys(seenIFSCGlobal);
             allCodes.forEach(function(code) {
                 var item = cache[code];

@@ -2,10 +2,41 @@
     'use strict';
 
     var IFSC = App.IFSC || {};
-    var ifscCache = JSON.parse(localStorage.getItem('personall_ifsc_cache') || '{}');
+    // Load the persisted cache defensively. A single corrupt/oversized entry
+    // must never kill the whole IFSC module (which would break table rendering).
+    var ifscCache = {};
+    try {
+        var _rawCache = JSON.parse(localStorage.getItem('personall_ifsc_cache') || '{}');
+        if (_rawCache && typeof _rawCache === 'object' && !Array.isArray(_rawCache)) {
+            var _cacheKeys = Object.keys(_rawCache);
+            for (var _ci = 0; _ci < _cacheKeys.length; _ci++) {
+                var _entry = _rawCache[_cacheKeys[_ci]];
+                if (_entry && typeof _entry === 'object' && typeof _entry.status === 'string') {
+                    ifscCache[_cacheKeys[_ci]] = _entry;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("Corrupt IFSC cache detected in localStorage — starting fresh.", e);
+        try { localStorage.removeItem('personall_ifsc_cache'); } catch (e2) {}
+    }
     var ifscApiBlocked = false;
     var ifscApiTested = false;
     var ifscCallbackQueue = {}; // { IFSC: [callback, ...] } for pending lookups
+
+    // fetch() wrapper with an abort timeout so a hanging network request can
+    // never leave cells stuck on "Looking up..." or deadlock the bulk queue.
+    function fetchWithTimeout(url, options, timeoutMs) {
+        var ms = timeoutMs || 15000;
+        if (typeof AbortController === 'undefined') return fetch(url, options);
+        var controller = new AbortController();
+        var timer = setTimeout(function () { controller.abort(); }, ms);
+        var opts = options || {};
+        opts.signal = controller.signal;
+        return fetch(url, opts).finally(function () {
+            clearTimeout(timer);
+        });
+    }
 
 
 
@@ -100,7 +131,7 @@ function testIfscApi() {
     }
 
     // Use HDFC0000001 as the known-valid code for the CORS/Network test
-    return fetch(apiUrl + "HDFC0000001", fetchOptions)
+    return fetchWithTimeout(apiUrl + "HDFC0000001", fetchOptions, 12000)
 
         .then(function(res) {
             if (res.ok) {
@@ -189,7 +220,7 @@ function lookupIFSC(ifscCode, callback) {
         };
     }
 
-    fetch(apiUrl + clean, fetchOptions)
+    fetchWithTimeout(apiUrl + clean, fetchOptions, 15000)
 
         .then(function(response) {
             if (!response.ok) {
