@@ -67,23 +67,6 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 
 
-App.formatters = {
-    amount: function(value) {
-        const num = Number(value);
-        if (value === null || value === undefined || value === '' || isNaN(num)) return '—';
-        const isNegative = num < 0;
-        const abs = Math.abs(num);
-        let formatted;
-        if (abs === 0) formatted = '0.00';
-        else if (abs >= 10000000) formatted = (abs / 10000000).toFixed(2) + ' Cr';
-        else if (abs >= 100000) formatted = (abs / 100000).toFixed(2) + ' L';
-        else if (abs >= 1000) formatted = (abs / 1000).toFixed(2) + ' K';
-        else formatted = abs.toFixed(2);
-        return (isNegative ? '-' : '') + formatted;
-    }
-};
-
-
 function setupDragAndDrop() {
     var dropZone = document.getElementById("drop-zone");
     var fileInput = document.getElementById("file-input");
@@ -133,7 +116,7 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
     var entitiesSet = {};
     var totalTxns = 0;
     var totalAmt = 0;
-    var amountPatterns = ["transaction amount", "withdrawal amount", "put on hold amount"];
+    var amountPatterns = ["amount", "amt"];
     var sheetNames = Object.keys(rawData);
 
     for (var si = 0; si < sheetNames.length; si++) {
@@ -171,9 +154,9 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
             entitiesSet[entityVal] = 1;
             totalTxns++;
 
-            if (amountCol && row[amountCol]) {
-                var amt = parseFloat(String(row[amountCol]).replace(/,/g, ""));
-                if (!isNaN(amt)) totalAmt += amt;
+            if (amountCol && row[amountCol] !== null && row[amountCol] !== undefined && row[amountCol] !== "") {
+                var amt = parseAmountValue(row[amountCol]);
+                if (amt !== null) totalAmt += amt;
             }
         }
     }
@@ -196,6 +179,105 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
             totalAmount: totalAmt
         }
     };
+}
+
+// Self-contained amount parser (no closures) — safe to embed in the Worker.
+function parseAmountValue(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'number') return (isFinite(value)) ? value : null;
+    if (typeof value === 'boolean') return null;
+    var str = String(value).trim();
+    if (str === '') return null;
+    var lower = str.toLowerCase().replace(/,/g, '');
+    var negative = false;
+    var m = lower.match(/^\(\s*(.+?)\s*\)$/);
+    if (m) { negative = true; lower = m[1]; }
+    var mult = 1;
+    if (/cr\s*$/.test(lower)) { mult = 10000000; lower = lower.replace(/cr\s*$/, ''); }
+    else if (/l[k]?\s*$/.test(lower)) { mult = 100000; lower = lower.replace(/l[k]?\s*$/, ''); }
+    else if (/k\s*$/.test(lower)) { mult = 1000; lower = lower.replace(/k\s*$/, ''); }
+    lower = lower.replace(/[^0-9.\-]/g, '');
+    if (lower === '' || lower === '-' || lower === '.') return null;
+    var num = parseFloat(lower);
+    if (isNaN(num)) return null;
+    if (negative) num = -Math.abs(num);
+    return num * mult;
+}
+
+// Precompute, once per workbook, which sheet contains which column roles and
+// which entities appear as receivers in money-transfer sheets of each layer.
+// This removes repeated per-row header scanning from table rendering and makes
+// the cross-layer "Linked from" check an O(1) Set lookup instead of an O(n) scan.
+function buildSheetColumnIndex(rawData, structuredData, layers) {
+    var colInfo = {};
+    var receiverSets = {};
+    var entityColCache = {};
+
+    function findEntityCol(headers) {
+        var patterns = App.state.primaryEntityPatterns || [];
+        for (var h = 0; h < headers.length; h++) {
+            var lower = headers[h].toLowerCase();
+            for (var p = 0; p < patterns.length; p++) {
+                if (lower.indexOf(patterns[p]) !== -1) return headers[h];
+            }
+        }
+        return null;
+    }
+
+    function findAmountCol(headers) {
+        for (var h = 0; h < headers.length; h++) {
+            if (App.Utils.isAmountHeader(headers[h])) return headers[h];
+        }
+        return null;
+    }
+
+    Object.keys(rawData).forEach(function(sheetName) {
+        var headers = rawData[sheetName].headers;
+        var entityCol = findEntityCol(headers);
+        var amountCol = findAmountCol(headers);
+        var receiverCol = null;
+        for (var h = 0; h < headers.length; h++) {
+            if (headers[h] !== entityCol && App.Utils.isReceiverHeader(headers[h], entityCol)) {
+                receiverCol = headers[h];
+                break;
+            }
+        }
+        var isMoneyTransfer = App.Utils.isMoneyTransferSheet(sheetName) || receiverCol !== null;
+        colInfo[sheetName] = {
+            entityCol: entityCol,
+            amountCol: amountCol,
+            receiverCol: receiverCol,
+            isMoneyTransfer: isMoneyTransfer
+        };
+        entityColCache[sheetName] = entityCol;
+    });
+
+    for (var li = 0; li < layers.length; li++) {
+        var layerKey = layers[li];
+        var receiverSet = new Set();
+        var entities = structuredData[layerKey] || {};
+        var entityNames = Object.keys(entities);
+        for (var ei = 0; ei < entityNames.length; ei++) {
+            var sheets = entities[entityNames[ei]];
+            var sheetNames = Object.keys(sheets);
+            for (var si = 0; si < sheetNames.length; si++) {
+                var sheetName = sheetNames[si];
+                var info = colInfo[sheetName];
+                if (!info || !info.isMoneyTransfer || !info.receiverCol) continue;
+                var rows = sheets[sheetName];
+                for (var ri = 0; ri < rows.length; ri++) {
+                    var rcVal = rows[ri][info.receiverCol];
+                    if (rcVal !== null && rcVal !== undefined && rcVal !== '') {
+                        receiverSet.add(String(rcVal).trim());
+                    }
+                }
+            }
+        }
+        receiverSets[layerKey] = receiverSet;
+    }
+
+    App.state.sheetColInfo = colInfo;
+    App.state.layerReceiverSets = receiverSets;
 }
 
 function buildSearchIndex(structuredData, layers) {
@@ -331,6 +413,9 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
     var workerCode =
         xlsxCode + "\n" +
         getColumnNameByPattern.toString() + "\n" +
+        App.Utils.normalizeHeaders.toString() + "\n" +
+        App.Utils.buildRowObject.toString() + "\n" +
+        parseAmountValue.toString() + "\n" +
         structureData.toString() + "\n" +
         buildSearchIndex.toString() + "\n" +
         "self.onmessage = function(e) {\n" +
@@ -346,14 +431,12 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
         "      for (var i = 0; i < Math.min(rr.length, 10); i++) {\n" +
         "        if (rr[i] && rr[i].filter(function(c){return c!==null&&c!=='';}).length > 2) { hi = i; break; }\n" +
         "      }\n" +
-        "      var hd = rr[hi].map(function(h){return h?h.toString().trim():'Col_'+Math.random();});\n" +
+        "      var hd = normalizeHeaders(rr[hi]);\n" +
         "      var dr = [];\n" +
         "      for (var j = hi+1; j < rr.length; j++) {\n" +
         "        var r = rr[j];\n" +
         "        if (!r || r.length===0 || r.every(function(c){return c===null||c==='';})) continue;\n" +
-        "        var ro = {};\n" +
-        "        hd.forEach(function(h,k){ro[h]=r[k];});\n" +
-        "        dr.push(ro);\n" +
+        "        dr.push(buildRowObject(hd, r));\n" +
         "      }\n" +
         "      if (dr.length>0) raw[sn]={headers:hd,rows:dr};\n" +
         "    });\n" +
@@ -378,6 +461,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
             App.state.stats = response.stats;
             App.state.searchIndex = response.searchIndex;
             App.state.mindMapReady = false;
+            buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
             updateDashboardUI();
         } else {
             console.error("Worker parsing error:", response.error);
@@ -447,6 +531,7 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
                     App.state.searchIndex = searchIndex;
                     App.state.mindMapReady = false;
 
+                    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
                     updateDashboardUI();
                 } catch (error) {
                     console.error("Error structuring data:", error);
@@ -493,19 +578,13 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
                         App.state.sheetIFSC[sn] = detectedIFSC;
                     }
 
-                    var headers = rawRows[headerRowIndex].map(function (h) {
-                        return h ? h.toString().trim() : "Column_" + Math.random();
-                    });
+                    var headers = App.Utils.normalizeHeaders(rawRows[headerRowIndex]);
                     var dataRows = [];
 
                     for (var j = headerRowIndex + 1; j < rawRows.length; j++) {
                         var rowArr = rawRows[j];
                         if (!rowArr || rowArr.length === 0 || rowArr.every(function (c) { return c === null || c === ""; })) continue;
-                        var rowObj = {};
-                        headers.forEach(function (header, k) {
-                            rowObj[header] = rowArr[k];
-                        });
-                        dataRows.push(rowObj);
+                        dataRows.push(App.Utils.buildRowObject(headers, rowArr));
                     }
 
                     if (dataRows.length > 0) {
@@ -548,6 +627,7 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
                     App.state.searchIndex = searchIndex;
                     App.state.mindMapReady = false;
 
+                    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
                     updateDashboardUI();
                 } catch (error) {
                     console.error("Error structuring merged data:", error);
@@ -595,19 +675,13 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
                             }
                         }
 
-                        var headers = rawRows[headerRowIndex].map(function (h) {
-                            return h ? h.toString().trim() : "Column_" + Math.random();
-                        });
+                        var headers = App.Utils.normalizeHeaders(rawRows[headerRowIndex]);
                         var dataRows = [];
 
                         for (var j = headerRowIndex + 1; j < rawRows.length; j++) {
                             var rowArr = rawRows[j];
                             if (!rowArr || rowArr.length === 0 || rowArr.every(function (c) { return c === null || c === ""; })) continue;
-                            var rowObj = {};
-                            headers.forEach(function (header, k) {
-                                rowObj[header] = rowArr[k];
-                            });
-                            dataRows.push(rowObj);
+                            dataRows.push(App.Utils.buildRowObject(headers, rowArr));
                         }
 
                         if (dataRows.length > 0) {
@@ -671,14 +745,23 @@ function updateDashboardUI() {
     };
 
     var rawData = App.state.rawData;
+    var layers = App.state.layers || [];
+    var structured = App.state.structuredData || {};
+    var sheetColInfo = App.state.sheetColInfo || {};
+
+    // Single pass over each sheet: detect IFSC presence and collect the unique
+    // IFSC codes for that sheet (each row is scanned exactly once).
+    var sheetIFSCSets = {};
+    var seenIFSCGlobal = {};
+
     Object.keys(rawData).forEach(function(sheetName) {
         var sheetData = rawData[sheetName];
         var rows = sheetData.rows || [];
         var headers = sheetData.headers || [];
+        var colInfo = sheetColInfo[sheetName] || {};
 
-        // Check columns
         var layerCol = getColumnNameByPattern(headers, App.state.layerPatterns);
-        var entityCol = getColumnNameByPattern(headers, App.state.primaryEntityPatterns);
+        var entityCol = colInfo.entityCol || getColumnNameByPattern(headers, App.state.primaryEntityPatterns);
 
         var ifscFound = false;
         var ifscSource = 'none';
@@ -687,30 +770,31 @@ function updateDashboardUI() {
         if (App.state.sheetIFSC && App.state.sheetIFSC[sheetName]) {
             ifscFound = true;
             ifscSource = 'sheet_metadata';
-        } else {
-            // Check headers
-            var hasHeader = headers.some(function(h) {
-                var hl = h.toLowerCase().replace(/[\s_\-\/]/g, "");
-                return hl.includes("ifsc") || hl.includes("ifs") || hl.includes("branchcode") || hl.includes("solid");
-            });
-            if (hasHeader) {
-                ifscFound = true;
-                ifscSource = 'header_col';
-            } else {
-                // Check sample values
-                var ifscRegex = /\b([A-Z]{4}0[A-Z0-9]{6})\b/i;
-                for (var i = 0; i < Math.min(rows.length, 100); i++) {
-                    for (var h of headers) {
-                        var val = String(rows[i][h] || "");
-                        if (ifscRegex.test(val)) {
-                            ifscFound = true;
-                            ifscSource = 'row_cell';
-                            break;
-                        }
-                    }
-                    if (ifscFound) break;
+        } else if (App.IFSC.hasIFSCData && App.IFSC.hasIFSCData(sheetName)) {
+            ifscFound = true;
+            ifscSource = 'header_or_row';
+        }
+
+        var sheetIFSCs = new Set();
+        for (var i = 0; i < rows.length; i++) {
+            // Unclassified rows stat
+            if (!layerCol || !entityCol) {
+                diagnosticReport.unclassifiedRows++;
+            }
+            if (App.IFSC.getRowIFSC) {
+                var ifscVal = App.IFSC.getRowIFSC(sheetName, rows[i]);
+                var code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                if (code) {
+                    var c = String(code).trim().toUpperCase();
+                    sheetIFSCs.add(c);
+                    seenIFSCGlobal[c] = true;
                 }
             }
+        }
+        sheetIFSCSets[sheetName] = sheetIFSCs;
+        if (sheetIFSCs.size > 0) {
+            ifscFound = true;
+            if (ifscSource === 'none') ifscSource = 'row_cell';
         }
 
         // Add to report
@@ -724,56 +808,34 @@ function updateDashboardUI() {
             virtualColumnShown: App.IFSC.hasIFSCData ? App.IFSC.hasIFSCData(sheetName) : ifscFound
         });
 
-        // Collect unique IFSC codes across all rows using the global getter
-        rows.forEach(function(row) {
-            // Unclassified rows stat
-            if (!layerCol || !entityCol) {
-                diagnosticReport.unclassifiedRows++;
-            }
-
-            if (App.IFSC.getRowIFSC) {
-                var ifscVal = App.IFSC.getRowIFSC(sheetName, row);
-                var code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
-                if (code) {
-                    diagnosticReport.uniqueIFSCs.add(String(code).trim().toUpperCase());
-                }
-            }
+        sheetIFSCs.forEach(function(code) {
+            diagnosticReport.uniqueIFSCs.add(code);
         });
     });
 
     // Build layer-priority ordered IFSC list grouped by layer.
-    // This allows us to perform bulk resolution layer-by-layer sequentially.
+    // Uses the per-sheet IFSC sets so no row is ever rescanned.
     var layerGroups = []; // Array of { layerKey: string, ifscs: Array }
-    var seenIFSCGlobal = {};
-    var layers = App.state.layers || [];
-    var structured = App.state.structuredData || {};
-    
     for (var lii = 0; lii < layers.length; lii++) {
         var lk = layers[lii];
         var entities = structured[lk];
         if (!entities) continue;
         var layerIFSCs = [];
+        var addedInLayer = {};
         var enames = Object.keys(entities);
         for (var ei = 0; ei < enames.length; ei++) {
             var sheets = entities[enames[ei]];
             if (!sheets) continue;
             var snames = Object.keys(sheets);
             for (var si = 0; si < snames.length; si++) {
-                var rows = sheets[snames[si]];
-                if (!rows) continue;
-                for (var ri = 0; ri < rows.length; ri++) {
-                    if (App.IFSC.getRowIFSC) {
-                        var ifscVal = App.IFSC.getRowIFSC(snames[si], rows[ri]);
-                        var code = App.IFSC.safeExtractIFSC ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
-                        if (code) {
-                            var c = String(code).trim().toUpperCase();
-                            if (!seenIFSCGlobal[c]) {
-                                seenIFSCGlobal[c] = true;
-                                layerIFSCs.push(c);
-                            }
-                        }
+                var sheetSet = sheetIFSCSets[snames[si]];
+                if (!sheetSet) continue;
+                sheetSet.forEach(function(code) {
+                    if (!addedInLayer[code]) {
+                        addedInLayer[code] = true;
+                        layerIFSCs.push(code);
                     }
-                }
+                });
             }
         }
         if (layerIFSCs.length > 0) {

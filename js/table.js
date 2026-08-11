@@ -124,6 +124,13 @@ function renderLayerData(layerKey, container) {
     const prevLayerKey = currentLayerIndex > 0 ? App.state.layers[currentLayerIndex - 1] : null;
     const query = App.state.lastSearchQuery || "";
 
+    // Use the precomputed per-layer receiver sets (built once per workbook in
+    // buildSheetColumnIndex) so per-entity linkage checks are O(1) Set lookups
+    // instead of rescanning the whole previous layer for every entity.
+    const crossRefSet = prevLayerKey
+        ? (App.state.layerReceiverSets && App.state.layerReceiverSets[prevLayerKey]) || buildCrossReferenceSet(prevLayerKey)
+        : new Set();
+
     // Pre-filter: figure out which entities have matches before starting DOM work
     const entityNames = Object.keys(entities);
     const visibleEntities = [];
@@ -161,7 +168,7 @@ function renderLayerData(layerKey, container) {
     // If few entities, render synchronously (no overhead for small layers)
     if (visibleEntities.length <= ENTITIES_PER_FRAME) {
         for (let i = 0; i < visibleEntities.length; i++) {
-            appendEntitySection(visibleEntities[i].entityName, visibleEntities[i].filteredSheetsData, prevLayerKey, container);
+            appendEntitySection(visibleEntities[i].entityName, visibleEntities[i].filteredSheetsData, crossRefSet, container);
         }
         return;
     }
@@ -171,7 +178,7 @@ function renderLayerData(layerKey, container) {
     function renderChunk() {
         const end = Math.min(idx + ENTITIES_PER_FRAME, visibleEntities.length);
         for (; idx < end; idx++) {
-            appendEntitySection(visibleEntities[idx].entityName, visibleEntities[idx].filteredSheetsData, prevLayerKey, container);
+            appendEntitySection(visibleEntities[idx].entityName, visibleEntities[idx].filteredSheetsData, crossRefSet, container);
         }
         if (idx < visibleEntities.length) {
             requestAnimationFrame(renderChunk);
@@ -180,7 +187,7 @@ function renderLayerData(layerKey, container) {
     requestAnimationFrame(renderChunk);
 }
 
-function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, container) {
+function appendEntitySection(entityName, filteredSheetsData, crossRefSet, container) {
     const entityDiv = document.createElement("div");
     entityDiv.className = "entity-section";
 
@@ -191,12 +198,9 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
     let headerText = `Entity: ${entityName} (${totalTxns} Transactions)`;
 
     let crossRefText = "";
-    if (prevLayerKey) {
-        const isLinked = checkCrossReference(prevLayerKey, entityName);
-        if (isLinked) {
-            crossRefText = `<span class="cross-ref-badge">Linked from ${prevLayerKey}</span>`;
-            entityDiv.classList.add("cross-ref");
-        }
+    if (crossRefSet && crossRefSet.has(entityName)) {
+        crossRefText = `<span class="cross-ref-badge">Linked from previous layer</span>`;
+        entityDiv.classList.add("cross-ref");
     }
 
     header.innerHTML = `<span>${crossRefText} ${headerText}</span> <span>&#9660;</span>`;
@@ -415,8 +419,16 @@ function appendEntitySection(entityName, filteredSheetsData, prevLayerKey, conta
 }
 
 function checkCrossReference(prevLayerKey, currentEntityName) {
+    return buildCrossReferenceSet(prevLayerKey).has(currentEntityName);
+}
+
+// Build a Set of entity names that appear as the receiver/destination account
+// in the previous layer's money-transfer sheets. Called once per layer render
+// so per-entity linkage checks are O(1) instead of a full-layer rescan.
+function buildCrossReferenceSet(prevLayerKey) {
+    const linked = new Set();
     const prevLayerEntities = App.state.structuredData[prevLayerKey];
-    if (!prevLayerEntities) return false;
+    if (!prevLayerEntities) return linked;
 
     const primaryPatterns = App.state.primaryEntityPatterns || [];
 
@@ -425,7 +437,7 @@ function checkCrossReference(prevLayerKey, currentEntityName) {
             const rows = prevLayerEntities[senderEntity][sheetName];
             if (!rows || !rows.length) continue;
 
-            const rowKeys = Object.keys(rows[0]);
+            const rowKeys = Object.keys(rows[0] || {});
             let entityCol = null;
             for (let ki = 0; ki < rowKeys.length; ki++) {
                 const kl = rowKeys[ki].toLowerCase();
@@ -443,10 +455,10 @@ function checkCrossReference(prevLayerKey, currentEntityName) {
                 const kl = rowKeys[ki].toLowerCase();
                 if (rowKeys[ki] === entityCol) continue;
 
-                if (kl.includes("to account") || 
-                    kl.includes("beneficiary") || 
-                    kl.includes("receiver") || 
-                    kl.includes("transferred to") || 
+                if (kl.includes("to account") ||
+                    kl.includes("beneficiary") ||
+                    kl.includes("receiver") ||
+                    kl.includes("transferred to") ||
                     kl.includes("destination") ||
                     kl === "account no" ||
                     kl === "to_account" ||
@@ -456,21 +468,22 @@ function checkCrossReference(prevLayerKey, currentEntityName) {
                 }
             }
 
-            const isMoneyTransfer = sheetName.toLowerCase().includes("money transfer") || 
-                                    sheetName.toLowerCase().includes("transfer") || 
+            const isMoneyTransfer = sheetName.toLowerCase().includes("money transfer") ||
+                                    sheetName.toLowerCase().includes("transfer") ||
                                     sheetName.toLowerCase().includes("fund flow") ||
                                     receiverCol !== null;
 
             if (isMoneyTransfer && receiverCol) {
                 for (const row of rows) {
-                    if (row[receiverCol] && String(row[receiverCol]).trim() === String(currentEntityName).trim()) {
-                        return true;
+                    const recv = row[receiverCol];
+                    if (recv !== null && recv !== undefined) {
+                        linked.add(String(recv).trim());
                     }
                 }
             }
         }
     }
-    return false;
+    return linked;
 }
 
 function isPrimaryEntityCol(colName) {
@@ -510,11 +523,14 @@ function performSearch(queryText = null, updateWindowRef = true) {
     const navigator = document.getElementById("layer-navigator");
     const summaryBar = document.getElementById("search-summary-bar");
 
-    // 1. Get search statistics using the flat index (single pass)
+    // 1. Get search statistics using the flat index (single pass).
+    //    Also collect per-layer entity sets here so the sidebar below never
+    //    has to re-scan the index (previous code was O(layers x index)).
     let totalMatches = 0;
     const layerMatchCounts = {};
     const matchedLayersSet = new Set();
     const matchedEntitiesSet = new Set();
+    const layerEntitySets = {};
 
     if (query !== "") {
         const searchIndex = App.state.searchIndex;
@@ -525,6 +541,8 @@ function performSearch(queryText = null, updateWindowRef = true) {
                 matchedLayersSet.add(m.layer);
                 matchedEntitiesSet.add(m.entity);
                 layerMatchCounts[m.layer] = (layerMatchCounts[m.layer] || 0) + 1;
+                if (!layerEntitySets[m.layer]) layerEntitySets[m.layer] = new Set();
+                layerEntitySets[m.layer].add(m.entity);
             }
         }
     }
@@ -573,18 +591,10 @@ function performSearch(queryText = null, updateWindowRef = true) {
     navigator.innerHTML = "";
 
     layers.forEach((layerKey, index) => {
-        // Use pre-computed layerMatchCounts for sidebar counts instead of re-scanning
+        // Use pre-computed stats from the single index pass
         let entityCount;
         if (query) {
-            // Count unique entities for this layer from the index
-            const entitySet = new Set();
-            const searchIndex = App.state.searchIndex;
-            for (let i = 0; i < searchIndex.length; i++) {
-                if (searchIndex[i].layer === layerKey && searchIndex[i].normalizedText.includes(query)) {
-                    entitySet.add(searchIndex[i].entity);
-                }
-            }
-            entityCount = entitySet.size;
+            entityCount = layerEntitySets[layerKey] ? layerEntitySets[layerKey].size : 0;
         } else {
             entityCount = getMatchingEntityCountForLayer(layerKey, "");
         }
