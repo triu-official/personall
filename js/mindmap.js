@@ -2,6 +2,111 @@
     'use strict';
 
     var Graph = App.Graph || {};
+
+// ------------------------------------------------------------------
+// Theme system — dark palette by default, light optional. Persisted.
+// ------------------------------------------------------------------
+var THEME_KEY = 'personall_graph_theme';
+
+function extractNameFromRemark(remark) {
+    if (!remark || remark === 'null') return null;
+    var str = String(remark).trim();
+    if (str === '') return null;
+
+    if (str.toUpperCase().indexOf('IB:') === 0) {
+        return str.substring(3).trim();
+    }
+
+    if (str.toUpperCase().indexOf('UPI-') === 0) {
+        var parts = str.split('-');
+        if (parts.length > 1) {
+            var nameCandidate = parts[1].trim();
+            if (nameCandidate && !/^\d+$/.test(nameCandidate) && nameCandidate.indexOf('@') === -1) {
+                return nameCandidate;
+            }
+        }
+    }
+
+    if (str.toUpperCase().indexOf('UPI/') === 0) {
+        var parts = str.split('/');
+        if (parts.length > 1) {
+            var nameCandidate = parts[1].trim();
+            if (/^\d+$/.test(nameCandidate) || nameCandidate.toUpperCase() === 'CW') {
+                if (parts.length > 2) {
+                    nameCandidate = parts[2].trim();
+                }
+            }
+            if (nameCandidate && !/^\d+$/.test(nameCandidate) && !/^[A-Z]{4}0[A-Z0-9]{6}$/i.test(nameCandidate)) {
+                return nameCandidate;
+            }
+        }
+    }
+
+    if (str.toUpperCase().indexOf('UPI:') === 0) {
+        var parts = str.split(':');
+        if (parts.length > 0) {
+            var lastPart = parts[parts.length - 1].trim();
+            if (lastPart && !/^\d+$/.test(lastPart)) {
+                return lastPart;
+            }
+        }
+    }
+
+    if (str.indexOf(',') !== -1) {
+        var parts = str.split(',');
+        var firstPart = parts[0].trim();
+        if (firstPart && !/^\d+$/.test(firstPart) && firstPart.length > 2) {
+            return firstPart;
+        }
+    }
+
+    if (/^(?:NFT|NEFT|RTGS)\//i.test(str)) {
+        var spaceIdx = str.indexOf(' ');
+        if (spaceIdx !== -1) {
+            return str.substring(spaceIdx + 1).trim();
+        }
+    }
+
+    return null;
+}
+
+function getGraphTheme() {
+    try {
+        var t = localStorage.getItem(THEME_KEY);
+        if (t === 'light' || t === 'dark') return t;
+    } catch (e) {}
+    return 'dark';
+}
+
+function getPalettes(theme) {
+    var dark = theme === 'dark';
+    return {
+        layerColors: dark ? [
+            '#1e3a5f', '#1b4d3e', '#7b3f00', '#4a1a6e', '#7b1e1e',
+            '#0d5c5c', '#5d3a00', '#2c2c44', '#7b5b00', '#0c5c4d'
+        ] : [
+            '#2980b9', '#27ae60', '#e67e22', '#8e44ad', '#e74c3c',
+            '#16a085', '#d35400', '#2c3e50', '#f39c12', '#1abc9c'
+        ],
+        unclassifiedColor: dark ? '#4a4a5a' : '#5d6d7e',
+        terminalColor: dark ? '#7b1e1e' : '#c0392b',
+        terminalBorder: dark ? '#581414' : '#962d22',
+        edgeColor: dark ? '#8a94a3' : '#7f8c8d',
+        labelColor: dark ? '#e8ecf1' : '#2c3e50',
+        labelOutline: dark ? '#1a1f2e' : '#ffffff',
+        moneyEdgeColor: dark ? '#7aa5d8' : '#2980b9',
+        terminalEdgeColor: dark ? '#c68a4a' : '#d35400'
+    };
+}
+
+function applyThemeToContainer(theme) {
+    var c = document.getElementById('cy');
+    if (c) {
+        if (theme === 'dark') c.classList.add('dark-theme');
+        else c.classList.remove('dark-theme');
+    }
+}
+
 // Mind map and graph visualization logic using Cytoscape.js
 function initMindMap() {
     try {
@@ -39,20 +144,10 @@ function initMindMap() {
 
         var elements = generateGraphElements(aggregateMode);
 
-        // Layer-based color palette — each layer gets a distinct, high-contrast color
-        var layerColors = [
-            '#2980b9', // Layer 1 — strong blue
-            '#27ae60', // Layer 2 — green
-            '#e67e22', // Layer 3 — orange
-            '#8e44ad', // Layer 4 — purple
-            '#e74c3c', // Layer 5 — red
-            '#16a085', // Layer 6 — teal
-            '#d35400', // Layer 7 — dark orange
-            '#2c3e50', // Layer 8 — dark blue-grey
-            '#f39c12', // Layer 9 — gold
-            '#1abc9c'  // Layer 10 — mint
-        ];
-        var unclassifiedColor = '#5d6d7e'; // grey for unclassified
+        // Theme-aware palette — dark, professional by default.
+        var pal = getPalettes(getGraphTheme());
+        var layerColors = pal.layerColors;
+        var unclassifiedColor = pal.unclassifiedColor;
 
         // Build dynamic styles that reference node data (strictly ES5)
         var dynamicStyle = [
@@ -60,7 +155,7 @@ function initMindMap() {
                 selector: 'node[type="entity"]',
                 style: {
                     'label': 'data(label)',
-                    'color': '#2c3e50',
+                    'color': pal.labelColor,
                     'font-size': '14px',
                     'font-weight': 'bold',
                     'text-valign': 'bottom',
@@ -70,8 +165,10 @@ function initMindMap() {
                     'height': 65,
                     'border-width': 5,
                     'shape': 'ellipse',
-                    'text-outline-color': '#ffffff',
-                    'text-outline-width': 2
+                    'text-outline-color': pal.labelOutline,
+                    'text-outline-width': 2,
+                    'text-wrap': 'wrap',
+                    'text-max-width': '120px'
                 }
             }
         ];
@@ -101,21 +198,21 @@ function initMindMap() {
             {
                 selector: 'node[type="terminal"]',
                 style: {
-                    'background-color': '#c0392b',
+                    'background-color': pal.terminalColor,
                     'label': 'data(label)',
-                    'color': '#333333',
+                    'color': pal.labelColor,
                     'font-size': '11px',
                     'font-weight': 'bold',
                     'text-valign': 'bottom',
                     'text-halign': 'center',
                     'text-margin-y': '5px',
-                    'text-outline-color': '#ffffff',
+                    'text-outline-color': pal.labelOutline,
                     'text-outline-width': 2,
                     'width': 25,
                     'height': 25,
                     'shape': 'diamond',
                     'border-width': 3,
-                    'border-color': '#962d22',
+                    'border-color': pal.terminalBorder,
                     'text-wrap': 'wrap',
                     'text-max-width': '100px'
                 }
@@ -124,8 +221,8 @@ function initMindMap() {
                 selector: 'edge',
                 style: {
                     'width': 2,
-                    'line-color': '#7f8c8d',
-                    'target-arrow-color': '#7f8c8d',
+                    'line-color': pal.edgeColor,
+                    'target-arrow-color': pal.edgeColor,
                     'target-arrow-shape': 'triangle',
                     'curve-style': 'bezier',
                     'label': 'data(amount)',
@@ -133,16 +230,16 @@ function initMindMap() {
                     'font-weight': 'bold',
                     'text-rotation': 'autorotate',
                     'text-margin-y': '-12px',
-                    'color': '#2c3e50',
-                    'text-outline-color': '#ffffff',
+                    'color': pal.labelColor,
+                    'text-outline-color': pal.labelOutline,
                     'text-outline-width': 1.5
                 }
             },
             {
                 selector: 'edge[type="money_transfer"]',
                 style: {
-                    'line-color': '#2980b9',
-                    'target-arrow-color': '#2980b9',
+                    'line-color': pal.moneyEdgeColor,
+                    'target-arrow-color': pal.moneyEdgeColor,
                     'line-style': 'solid',
                     'width': 4
                 }
@@ -151,8 +248,8 @@ function initMindMap() {
                 selector: 'edge[type="terminal_flow"]',
                 style: {
                     'line-style': 'dashed',
-                    'line-color': '#d35400',
-                    'target-arrow-color': '#d35400',
+                    'line-color': pal.terminalEdgeColor,
+                    'target-arrow-color': pal.terminalEdgeColor,
                     'width': 3
                 }
             },
@@ -175,6 +272,7 @@ function initMindMap() {
         var cyContainer = document.getElementById('cy');
         if (!cyContainer) return;
         cyContainer.innerHTML = "";
+        applyThemeToContainer(getGraphTheme());
 
         if (!elements || !elements.nodes || elements.nodes.length === 0) {
             cyContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#7f8c8d;font-size:14px;">No graph data available — add transactions with layer and account information.</div>';
@@ -208,15 +306,102 @@ function initMindMap() {
 
         App.state.cy = cy;
 
-        // Hover effects — scale up entity on mouseover for discoverability
-        cy.on('mouseover', 'node[type="entity"]', function(evt) {
-            evt.target.style('width', 80);
-            evt.target.style('height', 80);
-            evt.target.style('font-size', '16px');
-            evt.target.style('z-index', 999);
+        // Setup tooltip element
+        var tooltipId = 'graph-node-tooltip';
+        var tooltip = document.getElementById(tooltipId);
+        if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.id = tooltipId;
+            tooltip.className = 'graph-tooltip';
+            tooltip.style.position = 'absolute';
+            tooltip.style.display = 'none';
+            tooltip.style.pointerEvents = 'none';
+            document.body.appendChild(tooltip);
+        }
+
+        // Hover effects — scale up entity on mouseover and show tooltip
+        cy.on('mouseover', 'node', function(evt) {
+            var node = evt.target;
+            if (node.data('type') === 'entity') {
+                node.style('width', 80);
+                node.style('height', 80);
+                node.style('font-size', '16px');
+                node.style('z-index', 999);
+            }
+
+            var id = node.data('id');
+            var type = node.data('type');
+            var content = '';
+
+            if (type === 'entity') {
+                var name = (App.state.graphAccountNames && App.state.graphAccountNames[id]) || 'Unknown Name';
+                var bank = (App.state.graphAccountBanks && App.state.graphAccountBanks[id]) || 'Unknown Bank';
+                var layer = node.data('layerStr') || 'Unknown Layer';
+                var ifsc = (App.state.graphAccountIFSCs && App.state.graphAccountIFSCs[id]) || '';
+
+                content = '<div><strong>Account:</strong> ' + id + '</div>' +
+                          '<div><strong>Name/Payee:</strong> ' + name + '</div>' +
+                          '<div><strong>Bank:</strong> ' + bank + '</div>' +
+                          '<div><strong>Layer:</strong> ' + layer + '</div>';
+
+                if (ifsc) {
+                    content += '<div><strong>IFSC:</strong> ' + ifsc + '</div>';
+                    if (App.IFSC && App.IFSC.getIFSCCachedSync) {
+                        var cacheItem = App.IFSC.getIFSCCachedSync(ifsc);
+                        if (cacheItem) {
+                            content += '<div class="tooltip-address"><strong>Branch & Address:</strong> ' + cacheItem.address + '</div>';
+                        }
+                    }
+                }
+            } else {
+                var label = node.data('label') || 'Terminal';
+                var layer = node.data('layerStr') || 'Unknown Layer';
+                content = '<div><strong>Type:</strong> ' + label + '</div>' +
+                          '<div><strong>Layer:</strong> ' + layer + '</div>';
+            }
+
+            tooltip.innerHTML = content;
+            tooltip.style.display = 'block';
         });
-        cy.on('mouseout', 'node[type="entity"]', function(evt) {
-            evt.target.removeStyle('width height font-size z-index');
+
+        cy.on('mousemove', 'node', function(evt) {
+            var renderedPosition = evt.renderedPosition;
+            var cyContainer = document.getElementById('cy');
+            var rect = cyContainer.getBoundingClientRect();
+            var x = rect.left + window.scrollX + renderedPosition.x + 15;
+            var y = rect.top + window.scrollY + renderedPosition.y + 15;
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        });
+
+        cy.on('mouseout', 'node', function(evt) {
+            var node = evt.target;
+            if (node.data('type') === 'entity') {
+                node.removeStyle('width height font-size z-index');
+            }
+            tooltip.style.display = 'none';
+        });
+
+        // Edge tooltips
+        cy.on('mouseover', 'edge', function(evt) {
+            var edge = evt.target;
+            var amt = edge.data('amount') || '—';
+            tooltip.innerHTML = '<div><strong>Transaction:</strong></div><div>' + amt + '</div>';
+            tooltip.style.display = 'block';
+        });
+
+        cy.on('mousemove', 'edge', function(evt) {
+            var renderedPosition = evt.renderedPosition;
+            var cyContainer = document.getElementById('cy');
+            var rect = cyContainer.getBoundingClientRect();
+            var x = rect.left + window.scrollX + renderedPosition.x + 15;
+            var y = rect.top + window.scrollY + renderedPosition.y + 15;
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        });
+
+        cy.on('mouseout', 'edge', function() {
+            tooltip.style.display = 'none';
         });
 
         // Interaction: show details on click
@@ -269,46 +454,8 @@ function highlightLayerInGraph(cy, layerKey) {
     }
 };
 
-function isSheetMoneyTransfer(sheetName, sampleRow) {
-    var lowerName = sheetName.toLowerCase();
-    if (lowerName.indexOf("money transfer") !== -1 || lowerName.indexOf("transfer") !== -1 || lowerName.indexOf("fund flow") !== -1) {
-        return true;
-    }
-    if (!sampleRow) return false;
-
-    var rowKeys = Object.keys(sampleRow);
-    var entityCol = null;
-    var primaryPatterns = App.state.primaryEntityPatterns || [];
-
-    // Find primary entity column in this row
-    for (var i = 0; i < rowKeys.length; i++) {
-        var kl = rowKeys[i].toLowerCase();
-        for (var p = 0; p < primaryPatterns.length; p++) {
-            if (kl.indexOf(primaryPatterns[p]) !== -1) {
-                entityCol = rowKeys[i];
-                break;
-            }
-        }
-        if (entityCol) break;
-    }
-
-    // Look for a distinct receiver column
-    for (var i = 0; i < rowKeys.length; i++) {
-        var kl = rowKeys[i].toLowerCase();
-        if (rowKeys[i] === entityCol) continue;
-
-        if (kl.indexOf("to account") !== -1 || 
-            kl.indexOf("beneficiary") !== -1 || 
-            kl.indexOf("receiver") !== -1 || 
-            kl.indexOf("transferred to") !== -1 || 
-            kl.indexOf("destination") !== -1 ||
-            kl === "account no" ||
-            kl === "to_account" ||
-            kl === "toacc") {
-            return true;
-        }
-    }
-    return false;
+function isSheetMoneyTransfer(sheetName, headers, entityCol) {
+    return App.Utils.isMoneyTransferSheet(sheetName, headers, entityCol);
 }
 
 function generateGraphElements(aggregateMode) {
@@ -321,54 +468,91 @@ function generateGraphElements(aggregateMode) {
     var addedNodes = {};
     var terminalNodeIdCounter = 0;
 
-    // Pre-compute per-sheet column info to avoid re-scanning headers for every row
+    // Build payee name, bank name and IFSC mappings from money-transfer transactions
+    var accountNames = {};
+    var accountBanks = {};
+    var accountIFSCs = {};
+
+    var rawData = App.state.rawData || {};
+    var sheetNamesList = Object.keys(rawData);
+    for (var sIdx = 0; sIdx < sheetNamesList.length; sIdx++) {
+        var sName = sheetNamesList[sIdx];
+        var sData = rawData[sName];
+        var sHeaders = sData.headers || [];
+        var sRows = sData.rows || [];
+        if (sHeaders.length === 0 || sRows.length === 0) continue;
+
+        var entityCol = App.Utils.findEntityCol(sHeaders);
+        var receiverCol = App.Utils.findReceiverCol(sHeaders, entityCol);
+        var isMoneyTransfer = App.Utils.isMoneyTransferSheet(sName, sHeaders, entityCol);
+
+        for (var rIdx = 0; rIdx < sRows.length; rIdx++) {
+            var row = sRows[rIdx];
+            var senderId = entityCol ? String(row[entityCol]).trim() : null;
+            var receiverId = (isMoneyTransfer && receiverCol) ? String(row[receiverCol]).trim() : null;
+
+            var rxBank = row['Bank/FIs'];
+            var txBank = row['Action Taken By bank'];
+
+            if (senderId && senderId !== 'null' && senderId !== '') {
+                if (txBank && txBank !== 'null' && txBank !== '') {
+                    accountBanks[senderId] = txBank;
+                }
+            }
+            if (receiverId && receiverId !== 'null' && receiverId !== '') {
+                if (rxBank && rxBank !== 'null' && rxBank !== '') {
+                    accountBanks[receiverId] = rxBank;
+                }
+            }
+
+            if (App.IFSC && App.IFSC.getRowIFSC) {
+                var ifscVal = App.IFSC.getRowIFSC(sName, row);
+                var code = (App.IFSC.safeExtractIFSC) ? App.IFSC.safeExtractIFSC(ifscVal) : (ifscVal && ifscVal.code ? ifscVal.code : null);
+                if (code) {
+                    var cleanCode = String(code).trim().toUpperCase();
+                    if (receiverId && receiverId !== 'null' && receiverId !== '') {
+                        accountIFSCs[receiverId] = cleanCode;
+                    }
+                    if (!receiverId && senderId && senderId !== 'null' && senderId !== '') {
+                        accountIFSCs[senderId] = cleanCode;
+                    }
+                }
+            }
+
+            if (row['Remarks']) {
+                var name = extractNameFromRemark(row['Remarks']);
+                if (name) {
+                    var targetId = receiverId || senderId;
+                    if (targetId && targetId !== 'null' && targetId !== '') {
+                        if (!accountNames[targetId] || name.length > accountNames[targetId].length) {
+                            accountNames[targetId] = name;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    App.state.graphAccountNames = accountNames;
+    App.state.graphAccountBanks = accountBanks;
+    App.state.graphAccountIFSCs = accountIFSCs;
+
     var sheetColInfo = {};
 
     function getColInfo(sheetName, sampleRow) {
         if (sheetColInfo[sheetName]) return sheetColInfo[sheetName];
         var rowKeys = sampleRow ? Object.keys(sampleRow) : [];
         var info = {
-            isMoneyTransfer: isSheetMoneyTransfer(sheetName, sampleRow),
+            isMoneyTransfer: isSheetMoneyTransfer(sheetName, rowKeys, null),
             entityCol: null,
             amountCol: null,
             receiverCol: null,
             patterns: App.state.primaryEntityPatterns || []
         };
-        // Find entity column
-        for (var i = 0; i < rowKeys.length; i++) {
-            var kl = rowKeys[i].toLowerCase();
-            for (var p = 0; p < info.patterns.length; p++) {
-                if (kl.indexOf(info.patterns[p]) !== -1) {
-                    info.entityCol = rowKeys[i];
-                    break;
-                }
-            }
-            if (info.entityCol) break;
-        }
-        // Find amount column
-        for (var i = 0; i < rowKeys.length; i++) {
-            if (rowKeys[i].toLowerCase().indexOf("amount") !== -1) {
-                info.amountCol = rowKeys[i];
-                break;
-            }
-        }
-        // Find receiver column (only for money transfer sheets)
+        info.entityCol = App.Utils.findEntityCol(rowKeys, info.patterns);
+        info.amountCol = App.Utils.findAmountCol(rowKeys);
         if (info.isMoneyTransfer) {
-            for (var i = 0; i < rowKeys.length; i++) {
-                var kl = rowKeys[i].toLowerCase();
-                if (rowKeys[i] === info.entityCol) continue;
-                if (kl.indexOf("to account") !== -1 || 
-                    kl.indexOf("beneficiary") !== -1 || 
-                    kl.indexOf("receiver") !== -1 || 
-                    kl.indexOf("transferred to") !== -1 || 
-                    kl.indexOf("destination") !== -1 ||
-                    kl === "account no" ||
-                    kl === "to_account" ||
-                    kl === "toacc") {
-                    info.receiverCol = rowKeys[i];
-                    break;
-                }
-            }
+            info.receiverCol = App.Utils.findReceiverCol(rowKeys, info.entityCol);
         }
         sheetColInfo[sheetName] = info;
         return info;
@@ -385,7 +569,6 @@ function generateGraphElements(aggregateMode) {
         return false;
     }
 
-    // Aggregation maps
     var moneyTransferMap = {};
     var terminalFlowMap = {};
 
@@ -408,20 +591,19 @@ function generateGraphElements(aggregateMode) {
                 var rows = sheets[sheetName];
                 if (!rows || !rows.length) continue;
 
-                // Pre-compute column info once per sheet
                 var colInfo = getColInfo(sheetName, rows[0]);
 
                 for (var ri = 0; ri < rows.length; ri++) {
                     var row = rows[ri];
-                    // Filter row by search query if active (early exit on first match)
                     if (query !== "" && !rowMatchesQuery(row, query)) continue;
 
-                    // Add sender node
                     if (!addedNodes[cleanEntityId]) {
+                        var name = accountNames[cleanEntityId];
+                        var nodeLabel = name ? (name + "\n(" + cleanEntityId + ")") : cleanEntityId;
                         elements.nodes.push({
                             data: {
                                 id: cleanEntityId,
-                                label: cleanEntityId,
+                                label: nodeLabel,
                                 type: 'entity',
                                 layer: layerIndex + 1,
                                 layerStr: layerKey
@@ -438,10 +620,12 @@ function generateGraphElements(aggregateMode) {
 
                         if (receiverId && receiverId !== cleanEntityId) {
                             if (!addedNodes[receiverId]) {
+                                var name = accountNames[receiverId];
+                                var nodeLabel = name ? (name + "\n(" + receiverId + ")") : receiverId;
                                 elements.nodes.push({
                                     data: {
                                         id: receiverId,
-                                        label: receiverId,
+                                        label: nodeLabel,
                                         type: 'entity',
                                         layer: layerIndex + 2,
                                         layerStr: layerKey
@@ -516,16 +700,12 @@ function generateGraphElements(aggregateMode) {
         }
     }
 
-    // Helper to parse amount
     function parseAmount(val) {
-        if (!val) return 0;
-        var num = parseFloat(String(val).replace(/,/g, ''));
-        return isNaN(num) ? 0 : num;
+        var num = App.Utils.parseAmount(val);
+        return (num === null) ? 0 : num;
     }
 
-    // Map aggregated elements into output lists
     if (aggregateMode) {
-        // 1. Add aggregated money transfers
         var mtKeys = Object.keys(moneyTransferMap);
         for (var mti = 0; mti < mtKeys.length; mti++) {
             var edgeKey = mtKeys[mti];
@@ -541,7 +721,6 @@ function generateGraphElements(aggregateMode) {
             });
         }
 
-        // 2. Add aggregated terminal nodes and edges
         var terminalCounter = 0;
         var tfKeys = Object.keys(terminalFlowMap);
         for (var tfi = 0; tfi < tfKeys.length; tfi++) {
@@ -626,6 +805,27 @@ document.addEventListener("DOMContentLoaded", function () {
                 });
                 var layout = App.state.cy.layout(getLayoutOptions(isSwimlane));
                 layout.run();
+            }
+        });
+    }
+
+    // Graph theme toggle (Dark/Light) — persisted, default dark.
+    var themeBtn = document.getElementById("btn-graph-theme");
+    if (themeBtn) {
+        var applyBtnState = function() {
+            var isDark = getGraphTheme() === 'dark';
+            themeBtn.textContent = isDark ? "◐" : "☀";
+            themeBtn.title = isDark ? "Switch to Light Theme" : "Switch to Dark Theme";
+            themeBtn.setAttribute("aria-pressed", String(isDark));
+        };
+        applyBtnState();
+        themeBtn.addEventListener("click", function () {
+            var next = getGraphTheme() === 'dark' ? 'light' : 'dark';
+            try { localStorage.setItem(THEME_KEY, next); } catch (e) {}
+            applyBtnState();
+            applyThemeToContainer(next);
+            if (App.state && App.state.cy) {
+                initMindMap();
             }
         });
     }

@@ -12,10 +12,31 @@ Object.assign(App.state, {
         totalAmount: 0
     },
     searchIndex: [],
+    searchIndexMap: null,
     mindMapReady: false,
-    primaryEntityPatterns: ["account no", "wallet", "pg", "pa", "id", "account no./(wallet/pg/pa) id"],
-    layerPatterns: ["layer", "layer no", "lyr"],
-    sheetIFSC: {}
+    sheetIFSC: {},
+    currentSourceNames: [],
+    currentSizeBytes: 0
+});
+
+// ---------------------------------------------------------------
+// Global error boundary → user-friendly toast (never a silent failure)
+// ---------------------------------------------------------------
+App.UI = App.UI || {};
+App.UI.toast = function(message, type) {
+    if (App.Perf && App.Perf.toast) App.Perf.toast(message, type);
+};
+window.addEventListener('error', function(e) {
+    console.error('Uncaught error:', e.error || e.message);
+    if (App.UI && App.UI.toast) {
+        App.UI.toast('Something went wrong: ' + ((e.error && e.error.message) || e.message || 'unknown error'), 'error');
+    }
+});
+window.addEventListener('unhandledrejection', function(e) {
+    console.error('Unhandled promise rejection:', e.reason);
+    if (App.UI && App.UI.toast) {
+        App.UI.toast('An operation could not be completed: ' + ((e.reason && e.reason.message) || 'unknown error'), 'error');
+    }
 });
 
 
@@ -63,6 +84,10 @@ document.addEventListener("DOMContentLoaded", function () {
     loadEnv(function () {
         setupDragAndDrop();
         setupTabs();
+        setupNewWorkbookButton();
+        if (App.Perf && App.Perf.init) App.Perf.init();
+        renderRecentWorkbooks();
+        restoreLastWorkbook();
     });
 });
 
@@ -97,6 +122,151 @@ function setupDragAndDrop() {
 }
 
 // ---------------------------------------------------------------
+// Persistence (notebook-style) — save after each load, restore on start,
+// and expose the "Recent Workbooks" panel in the upload overlay.
+// ---------------------------------------------------------------
+function setupNewWorkbookButton() {
+    var btn = document.getElementById("new-workbook-btn");
+    if (btn) {
+        btn.addEventListener("click", function () {
+            var overlay = document.getElementById("upload-overlay");
+            var dashboard = document.getElementById("dashboard");
+            if (overlay) {
+                overlay.classList.remove("hidden");
+                overlay.style.display = "flex";
+            }
+            if (dashboard) dashboard.style.display = "none";
+            renderRecentWorkbooks();
+        });
+    }
+
+    var clearBtn = document.getElementById("clear-history-btn");
+    if (clearBtn) {
+        clearBtn.addEventListener("click", function () {
+            if (!confirm("Clear all saved workbooks from this browser?")) return;
+            if (App.Storage && App.Storage.clearWorkbooks) {
+                App.Storage.clearWorkbooks().then(renderRecentWorkbooks);
+            }
+        });
+    }
+}
+
+function formatBytes(bytes) {
+    if (!bytes) return "";
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+    if (bytes >= 1024) return (bytes / 1024).toFixed(0) + " KB";
+    return bytes + " B";
+}
+
+function renderRecentWorkbooks() {
+    var list = document.getElementById("recent-workbooks-list");
+    var panel = document.getElementById("recent-workbooks-panel");
+    if (!list) return;
+    if (!(App.Storage && App.Storage.listWorkbooks)) {
+        if (panel) panel.style.display = "none";
+        return;
+    }
+    App.Storage.listWorkbooks().then(function (workbooks) {
+        if (!workbooks || workbooks.length === 0) {
+            list.innerHTML = '<p class="recent-empty">No saved workbooks yet.</p>';
+            if (panel) panel.style.display = "block";
+            return;
+        }
+        list.innerHTML = "";
+        workbooks.forEach(function (wb) {
+            var item = document.createElement("div");
+            item.className = "recent-item";
+            var date = new Date(wb.timestamp || Date.now());
+            var meta = wb.metadata || {};
+            var sizeLabel = wb.sizeBytes ? formatBytes(wb.sizeBytes) : "";
+            item.innerHTML =
+                '<div class="recent-info">' +
+                    '<strong class="recent-name"></strong>' +
+                    '<span class="recent-meta"></span>' +
+                '</div>' +
+                '<div class="recent-actions">' +
+                    '<button type="button" class="recent-load">Load</button>' +
+                    '<button type="button" class="recent-del" aria-label="Delete">Delete</button>' +
+                '</div>';
+            item.querySelector('.recent-name').textContent = wb.name;
+            item.querySelector('.recent-meta').textContent =
+                date.toLocaleString() + ' · ' +
+                (meta.sheets || 0) + ' sheets · ' +
+                (meta.rows || 0) + ' rows' +
+                (sizeLabel ? ' · ' + sizeLabel : '');
+            item.querySelector('.recent-load').addEventListener("click", function () {
+                loadSavedWorkbook(wb.id);
+            });
+            item.querySelector('.recent-del').addEventListener("click", function () {
+                if (!confirm('Delete saved workbook "' + wb.name + '"?')) return;
+                App.Storage.deleteWorkbook(wb.id).then(renderRecentWorkbooks);
+            });
+            list.appendChild(item);
+        });
+        if (panel) panel.style.display = "block";
+    });
+}
+
+function loadSavedWorkbook(id) {
+    if (!(App.Storage && App.Storage.loadWorkbook)) return;
+    App.Storage.loadWorkbook(id).then(function (rec) {
+        if (!rec || !rec.state || !rec.state.layers || rec.state.layers.length === 0) {
+            if (App.UI && App.UI.toast) App.UI.toast('Could not load that workbook.', 'error');
+            return;
+        }
+        applyWorkbookState(rec.state, rec.sourceNames, rec.sizeBytes);
+        if (App.UI && App.UI.toast) App.UI.toast('Loaded workbook: ' + rec.name, 'success');
+    });
+}
+
+function restoreLastWorkbook() {
+    if (!(App.Storage && App.Storage.getCurrentWorkbookId && App.Storage.loadWorkbook)) return;
+    var id = App.Storage.getCurrentWorkbookId();
+    if (!id) return;
+    App.Storage.loadWorkbook(id).then(function (rec) {
+        if (!rec || !rec.state || !rec.state.layers || rec.state.layers.length === 0) return;
+        applyWorkbookState(rec.state, rec.sourceNames, rec.sizeBytes);
+        if (App.UI && App.UI.toast) App.UI.toast('Restored saved workbook: ' + rec.name, 'info');
+    });
+}
+
+// Apply a persisted or freshly-parsed state to the app and render everything.
+function applyWorkbookState(state, sourceNames, sizeBytes) {
+    App.state.rawData = state.rawData || {};
+    App.state.structuredData = state.structuredData || {};
+    App.state.layers = state.layers || [];
+    App.state.stats = state.stats || { layers: 0, entities: 0, transactions: 0, totalAmount: 0 };
+    App.state.sheetIFSC = state.sheetIFSC || {};
+    App.state.forceFullGraph = false;
+    App.state.lastSearchQuery = "";
+    App.state.mindMapReady = false;
+
+    // Rebuild the search index (flat + inverted) after restore so it is never stale.
+    App.state.searchIndex = buildSearchIndex(App.state.structuredData, App.state.layers);
+    App.state.searchIndexMap = (App.Utils && App.Utils.buildInvertedIndex)
+        ? App.Utils.buildInvertedIndex(App.state.searchIndex) : null;
+
+    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
+    updateDashboardUI();
+
+    App.state.currentSourceNames = sourceNames || [];
+    App.state.currentSizeBytes = sizeBytes || 0;
+}
+
+// Called by every parse-completion path once state has been populated.
+function finalizeWorkbookLoad(sourceNames, sizeBytes) {
+    App.state.searchIndexMap = (App.Utils && App.Utils.buildInvertedIndex)
+        ? App.Utils.buildInvertedIndex(App.state.searchIndex) : null;
+    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
+    updateDashboardUI();
+    App.state.currentSourceNames = sourceNames || [];
+    App.state.currentSizeBytes = sizeBytes || 0;
+    if (App.Storage && App.Storage.saveWorkbook) {
+        App.Storage.saveWorkbook(App.state, App.state.currentSourceNames, App.state.currentSizeBytes);
+    }
+}
+
+// ---------------------------------------------------------------
 // Data helpers — used both by the main thread fallback AND
 // serialized into the Web Worker via .toString() when possible.
 // Keep them self-contained (no closures over window.*).
@@ -109,6 +279,43 @@ function getColumnNameByPattern(headers, patterns) {
         }
     }
     return null;
+}
+
+function deduplicateSheetColumns(rawData) {
+    var sheetNames = Object.keys(rawData);
+    for (var s = 0; s < sheetNames.length; s++) {
+        var sheetName = sheetNames[s];
+        var sheetData = rawData[sheetName];
+        var headers = sheetData.headers || [];
+        var rows = sheetData.rows || [];
+        if (headers.length === 0 || rows.length === 0) continue;
+
+        var seenClean = {};
+        var toRemove = [];
+        var newHeaders = [];
+
+        for (var i = 0; i < headers.length; i++) {
+            var h = headers[i];
+            var clean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (seenClean[clean] !== undefined) {
+                toRemove.push(h);
+                continue;
+            } else {
+                seenClean[clean] = h;
+            }
+            newHeaders.push(h);
+        }
+
+        if (toRemove.length > 0) {
+            sheetData.headers = newHeaders;
+            for (var rIdx = 0; rIdx < rows.length; rIdx++) {
+                var row = rows[rIdx];
+                for (var rm = 0; rm < toRemove.length; rm++) {
+                    delete row[toRemove[rm]];
+                }
+            }
+        }
+    }
 }
 
 function structureData(rawData, layerPatterns, primaryEntityPatterns) {
@@ -127,6 +334,13 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
         var entityCol = getColumnNameByPattern(headers, primaryEntityPatterns);
         var amountCol = getColumnNameByPattern(headers, amountPatterns);
 
+        if (!amountCol) {
+            amountCol = 'Transaction Amount';
+            if (headers.indexOf(amountCol) === -1) {
+                headers.push(amountCol);
+            }
+        }
+
         for (var ri = 0; ri < rows.length; ri++) {
             var row = rows[ri];
             var isUnclassified = false;
@@ -141,8 +355,9 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
 
             var layerKey = layerVal;
             if (!isUnclassified) {
-                var layerMatch = String(layerVal).match(/\d+/);
+                var layerMatch = String(layerVal).match(/\-?\d+/);
                 var layerNum = layerMatch ? parseInt(layerMatch[0]) : 999;
+                if (layerNum < 0) layerNum = Math.max(1, Math.abs(layerNum));
                 layerKey = "Layer " + layerNum;
             }
 
@@ -154,18 +369,30 @@ function structureData(rawData, layerPatterns, primaryEntityPatterns) {
             entitiesSet[entityVal] = 1;
             totalTxns++;
 
-            if (amountCol && row[amountCol] !== null && row[amountCol] !== undefined && row[amountCol] !== "") {
-                var amt = parseAmountValue(row[amountCol]);
-                if (amt !== null) totalAmt += amt;
+            var amt = null;
+            if (row[amountCol] !== null && row[amountCol] !== undefined && row[amountCol] !== "") {
+                amt = parseAmountValue(row[amountCol]);
             }
+            if ((amt === null || amt === 0) && row['Remarks']) {
+                var remarkStr = String(row['Remarks']);
+                var match = remarkStr.match(/(?:Rs|INR|Rupees)\.?\s*([\d,]+(?:\.\d+)?)/i);
+                if (match) {
+                    amt = parseFloat(match[1].replace(/,/g, ''));
+                }
+            }
+            row[amountCol] = amt;
+
+            if (amt !== null) totalAmt += amt;
         }
     }
 
     var layerKeys = Object.keys(structured).sort(function (a, b) {
         if (a === "Unclassified Data") return 1;
         if (b === "Unclassified Data") return -1;
-        var numA = parseInt((a.match(/\d+/) || [999])[0]);
-        var numB = parseInt((b.match(/\d+/) || [999])[0]);
+        var numA = parseInt((a.match(/\-?\d+/) || [999])[0]);
+        var numB = parseInt((b.match(/\-?\d+/) || [999])[0]);
+        if (numA < 0 && numB >= 0) return 1;
+        if (numB < 0 && numA >= 0) return -1;
         return numA - numB;
     });
 
@@ -211,45 +438,19 @@ function parseAmountValue(value) {
 function buildSheetColumnIndex(rawData, structuredData, layers) {
     var colInfo = {};
     var receiverSets = {};
-    var entityColCache = {};
-
-    function findEntityCol(headers) {
-        var patterns = App.state.primaryEntityPatterns || [];
-        for (var h = 0; h < headers.length; h++) {
-            var lower = headers[h].toLowerCase();
-            for (var p = 0; p < patterns.length; p++) {
-                if (lower.indexOf(patterns[p]) !== -1) return headers[h];
-            }
-        }
-        return null;
-    }
-
-    function findAmountCol(headers) {
-        for (var h = 0; h < headers.length; h++) {
-            if (App.Utils.isAmountHeader(headers[h])) return headers[h];
-        }
-        return null;
-    }
 
     Object.keys(rawData).forEach(function(sheetName) {
         var headers = rawData[sheetName].headers;
-        var entityCol = findEntityCol(headers);
-        var amountCol = findAmountCol(headers);
-        var receiverCol = null;
-        for (var h = 0; h < headers.length; h++) {
-            if (headers[h] !== entityCol && App.Utils.isReceiverHeader(headers[h], entityCol)) {
-                receiverCol = headers[h];
-                break;
-            }
-        }
-        var isMoneyTransfer = App.Utils.isMoneyTransferSheet(sheetName) || receiverCol !== null;
+        var entityCol = App.Utils.findEntityCol(headers);
+        var amountCol = App.Utils.findAmountCol(headers);
+        var receiverCol = App.Utils.findReceiverCol(headers, entityCol);
+        var isMoneyTransfer = App.Utils.isMoneyTransferSheet(sheetName, headers, entityCol);
         colInfo[sheetName] = {
             entityCol: entityCol,
             amountCol: amountCol,
             receiverCol: receiverCol,
             isMoneyTransfer: isMoneyTransfer
         };
-        entityColCache[sheetName] = entityCol;
     });
 
     for (var li = 0; li < layers.length; li++) {
@@ -348,6 +549,10 @@ function handleFiles(fileList) {
     var isLocal = (window.location.protocol === "file:");
     console.log("Protocol:", window.location.protocol, "| Running", isLocal ? "LOCAL (file://)" : "SERVER", "mode");
 
+    var sourceNames = files.map(function (f) { return f.name; });
+    var totalBytes = 0;
+    for (var bi = 0; bi < files.length; bi++) totalBytes += (files[bi].size || 0);
+
     // Read all files into ArrayBuffers first, then process sequentially
     var arrays = [];
     var readCount = 0;
@@ -364,13 +569,13 @@ function handleFiles(fileList) {
                         // Single file: use existing optimized path (Worker if available)
                         var ab = arrays[0].buffer;
                         if (!isLocal) {
-                            tryWorkerParsing(ab, localLoading, globalLoading);
+                            tryWorkerParsing(ab, localLoading, globalLoading, sourceNames, totalBytes);
                         } else {
-                            parseMainThreadAsync(ab, localLoading, globalLoading);
+                            parseMainThreadAsync(ab, localLoading, globalLoading, sourceNames, totalBytes);
                         }
                     } else {
                         // Multiple files: process sequentially on main thread, merge rawData
-                        processMultipleFilesAsync(arrays, localLoading, globalLoading);
+                        processMultipleFilesAsync(arrays, localLoading, globalLoading, sourceNames, totalBytes);
                     }
                 }
             };
@@ -382,7 +587,7 @@ function handleFiles(fileList) {
 // ---------------------------------------------------------------
 // Web Worker path (HTTP/HTTPS only)
 // ---------------------------------------------------------------
-function tryWorkerParsing(arrayBuffer, localLoading, globalLoading) {
+function tryWorkerParsing(arrayBuffer, localLoading, globalLoading, sourceNames, totalBytes) {
     if (localLoading) localLoading.querySelector("span").innerText = "Loading parser library...";
     if (globalLoading) globalLoading.querySelector("p").innerText = "Loading parser library...";
 
@@ -390,20 +595,20 @@ function tryWorkerParsing(arrayBuffer, localLoading, globalLoading) {
     xhr.open("GET", "libs/xlsx.full.min.js", true);
     xhr.onload = function () {
         if (xhr.status >= 200 && xhr.status < 300) {
-            runWorker(arrayBuffer, xhr.responseText, localLoading, globalLoading);
+            runWorker(arrayBuffer, xhr.responseText, localLoading, globalLoading, sourceNames, totalBytes);
         } else {
             console.warn("XLSX library fetch returned status " + xhr.status + ", falling back to main-thread.");
-            parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+            parseMainThreadAsync(arrayBuffer, localLoading, globalLoading, sourceNames, totalBytes);
         }
     };
     xhr.onerror = function () {
         console.warn("XLSX library fetch failed (network error), falling back to main-thread.");
-        parseMainThreadAsync(arrayBuffer, localLoading, globalLoading);
+        parseMainThreadAsync(arrayBuffer, localLoading, globalLoading, sourceNames, totalBytes);
     };
     xhr.send();
 }
 
-function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
+function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading, sourceNames, totalBytes) {
     if (localLoading) localLoading.querySelector("span").innerText = "Parsing workbook in background thread...";
     if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing & structuring data...";
 
@@ -416,6 +621,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
         App.Utils.normalizeHeaders.toString() + "\n" +
         App.Utils.buildRowObject.toString() + "\n" +
         parseAmountValue.toString() + "\n" +
+        deduplicateSheetColumns.toString() + "\n" +
         structureData.toString() + "\n" +
         buildSearchIndex.toString() + "\n" +
         "self.onmessage = function(e) {\n" +
@@ -440,6 +646,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
         "      }\n" +
         "      if (dr.length>0) raw[sn]={headers:hd,rows:dr};\n" +
         "    });\n" +
+        "    deduplicateSheetColumns(raw);\n" +
         "    var res = structureData(raw, d.layerPatterns, d.primaryEntityPatterns);\n" +
         "    var idx = buildSearchIndex(res.structuredData, res.layers);\n" +
         "    self.postMessage({status:'success',rawData:raw,structuredData:res.structuredData,layers:res.layers,stats:res.stats,searchIndex:idx});\n" +
@@ -461,8 +668,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
             App.state.stats = response.stats;
             App.state.searchIndex = response.searchIndex;
             App.state.mindMapReady = false;
-            buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
-            updateDashboardUI();
+            finalizeWorkbookLoad(sourceNames, totalBytes);
         } else {
             console.error("Worker parsing error:", response.error);
             alert("Error parsing workbook: " + response.error);
@@ -489,7 +695,7 @@ function runWorker(arrayBuffer, xlsxCode, localLoading, globalLoading) {
 // ---------------------------------------------------------------
 // Main-thread fallback (always works — XLSX is loaded via <script>)
 // ---------------------------------------------------------------
-function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
+function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading, sourceNames, totalBytes) {
     if (localLoading) localLoading.querySelector("span").innerText = "Parsing workbook...";
     if (globalLoading) globalLoading.querySelector("p").innerText = "Parsing workbook...";
 
@@ -498,7 +704,7 @@ function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
         try {
             var data = new Uint8Array(arrayBuffer);
             var workbook = XLSX.read(data, { type: "array", cellFormula: false, cellHTML: false, cellStyles: false });
-            processWorkbookAsync(workbook, localLoading, globalLoading);
+            processWorkbookAsync(workbook, localLoading, globalLoading, sourceNames, totalBytes);
         } catch (error) {
             console.error("Error parsing workbook on main thread:", error);
             alert("Error parsing Excel file: " + (error.message || String(error)));
@@ -508,7 +714,7 @@ function parseMainThreadAsync(arrayBuffer, localLoading, globalLoading) {
 }
 
 // Sheet-by-sheet async processing to avoid blocking main thread
-function processWorkbookAsync(workbook, localLoading, globalLoading) {
+function processWorkbookAsync(workbook, localLoading, globalLoading, sourceNames, totalBytes) {
     var rawData = {};
     var sheetNames = workbook.SheetNames;
     var idx = 0;
@@ -516,6 +722,7 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
     function parseNext() {
         if (idx >= sheetNames.length) {
             // All sheets parsed — structure and index
+            deduplicateSheetColumns(rawData);
             if (localLoading) localLoading.querySelector("span").innerText = "Structuring data...";
             if (globalLoading) globalLoading.querySelector("p").innerText = "Structuring data...";
 
@@ -531,8 +738,7 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
                     App.state.searchIndex = searchIndex;
                     App.state.mindMapReady = false;
 
-                    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
-                    updateDashboardUI();
+                    finalizeWorkbookLoad(sourceNames, totalBytes);
                 } catch (error) {
                     console.error("Error structuring data:", error);
                     alert("Error structuring data: " + error.message);
@@ -605,13 +811,14 @@ function processWorkbookAsync(workbook, localLoading, globalLoading) {
 // ---------------------------------------------------------------
 // Multi-file async processor — parses each file and merges rawData
 // ---------------------------------------------------------------
-function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
+function processMultipleFilesAsync(arrays, localLoading, globalLoading, sourceNames, totalBytes) {
     var mergedRawData = {};
     var idx = 0;
 
     function parseNextFile() {
         if (idx >= arrays.length) {
             // All files parsed — structure and render
+            deduplicateSheetColumns(mergedRawData);
             if (localLoading) localLoading.querySelector("span").innerText = "Structuring merged data...";
             if (globalLoading) globalLoading.querySelector("p").innerText = "Structuring merged data from " + arrays.length + " files...";
 
@@ -627,8 +834,7 @@ function processMultipleFilesAsync(arrays, localLoading, globalLoading) {
                     App.state.searchIndex = searchIndex;
                     App.state.mindMapReady = false;
 
-                    buildSheetColumnIndex(App.state.rawData, App.state.structuredData, App.state.layers);
-                    updateDashboardUI();
+                    finalizeWorkbookLoad(sourceNames, totalBytes);
                 } catch (error) {
                     console.error("Error structuring merged data:", error);
                     alert("Error structuring merged data: " + error.message);
@@ -843,14 +1049,33 @@ function updateDashboardUI() {
         }
     }
 
-    // Sequentially resolve layer-by-layer
+    // Sequentially resolve layer-by-layer, with a visible progress indicator.
     var groupIndex = 0;
+    var allUniqueIFSC = Object.keys(seenIFSCGlobal);
+    var resolvedCount = 0;
+
+    function updateIfscProgress(done) {
+        var el = document.getElementById("ifsc-progress");
+        if (!el) return;
+        var total = allUniqueIFSC.length;
+        if (total === 0) {
+            el.style.display = "none";
+            return;
+        }
+        el.style.display = "flex";
+        el.innerHTML = '<div class="spinner-small" style="margin-right:10px;"></div><span>Resolving bank addresses <strong>' + done + '</strong> of <strong>' + total + '</strong>... </span>';
+    }
+
+    function hideIfscProgress() {
+        var el = document.getElementById("ifsc-progress");
+        if (el) { el.style.display = "none"; el.innerHTML = ""; }
+    }
+
     function resolveNextLayerGroup() {
         if (groupIndex >= layerGroups.length) {
             // Resolution complete. Tally stats based on cache.
             var cache = (App.IFSC && App.IFSC.getCache) ? (App.IFSC.getCache() || {}) : {};
-            var allCodes = Object.keys(seenIFSCGlobal);
-            allCodes.forEach(function(code) {
+            allUniqueIFSC.forEach(function(code) {
                 var item = cache[code];
                 if (!item) {
                     diagnosticReport.resolutions.failed++;
@@ -862,18 +1087,23 @@ function updateDashboardUI() {
                     diagnosticReport.resolutions.failed++;
                 }
             });
+            hideIfscProgress();
             console.log("--- WORKBOOK DIAGNOSTIC REPORT ---", diagnosticReport);
             return;
         }
 
         var group = layerGroups[groupIndex];
         console.log("Starting bulk IFSC resolution for: " + group.layerKey + " (" + group.ifscs.length + " unique codes)");
-        
+
         if (App.IFSC.startBulkIFSCResolution && group.ifscs.length > 0) {
+            var groupBase = resolvedCount;
             App.IFSC.startBulkIFSCResolution(group.ifscs, function() {
                 console.log("Completed bulk IFSC resolution for: " + group.layerKey);
                 groupIndex++;
                 resolveNextLayerGroup();
+            }, function(completed) {
+                resolvedCount = groupBase + completed;
+                updateIfscProgress(resolvedCount);
             });
         } else {
             groupIndex++;
@@ -898,6 +1128,10 @@ function updateDashboardUI() {
     if (App.state.cy) {
         App.state.cy.destroy();
         App.state.cy = null;
+    }
+    // Warn about very large workbooks (memory / row-count monitor)
+    if (App.Perf && App.Perf.warnRowCount) {
+        App.Perf.warnRowCount(App.state.stats ? App.state.stats.transactions : 0);
     }
     // If the graph tab is currently active, rebuild immediately
     var graphTab = document.querySelector('.tab-btn[data-target="graph-view"]');

@@ -12,6 +12,7 @@
         <h1>Financial Transaction Visualizer</h1>
         <div class="controls">
             <button id="export-word-btn" class="export-btn" style="display: none;">Export to Word</button>
+            <button id="new-workbook-btn" class="export-btn" style="display: none;" title="Upload a different workbook">New Workbook</button>
             <div class="search-filter">
                 <input type="text" id="global-search" placeholder="Search Account, UTR, Amount...">
                 <button id="filter-btn">Filter</button>
@@ -35,6 +36,10 @@
         <p>Processing Workbook...</p>
     </div>
 
+    <!-- Global toast + performance warning containers -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+    <div id="perf-warning" class="perf-warning-container" aria-live="polite"></div>
+
     <div id="upload-overlay" class="upload-overlay active">
         <div class="upload-box" id="drop-zone">
             <h2>Upload Financial Data</h2>
@@ -48,9 +53,21 @@
             </div>
             <p class="privacy-note">🔒 100% Local Processing — No data uploaded to any server</p>
         </div>
+
+        <div id="recent-workbooks-panel" class="recent-panel">
+            <div class="recent-header">
+                <h3>Recent Workbooks</h3>
+                <button id="clear-history-btn" class="recent-clear" type="button">Clear History</button>
+            </div>
+            <div id="recent-workbooks-list" class="recent-list">
+                <p class="recent-empty">No saved workbooks yet.</p>
+            </div>
+        </div>
     </div>
 
     <div class="dashboard" id="dashboard" style="display: none;">
+
+        <div id="ifsc-progress" class="ifsc-progress" style="display: none;"></div>
 
         <div class="summary-cards" id="summary-cards">
             <div class="card">
@@ -95,18 +112,20 @@
                 <div id="graph-view" class="view-panel">
                     <div id="graph-perf-banner" class="graph-perf-banner" style="display: none;"></div>
                     <div class="graph-controls-overlay">
-                        <button id="btn-fullscreen" title="Toggle Fullscreen" class="control-btn">⛶</button>
+                        <button id="btn-fullscreen" title="Toggle Fullscreen" class="control-btn" aria-label="Toggle fullscreen">⛶</button>
                         <div class="divider"></div>
-                        <button id="btn-zoom-in" title="Zoom In" class="control-btn">+</button>
-                        <button id="btn-zoom-out" title="Zoom Out" class="control-btn">−</button>
-                        <button id="btn-zoom-fit" title="Fit Screen" class="control-btn">⊙</button>
+                        <button id="btn-zoom-in" title="Zoom In" class="control-btn" aria-label="Zoom in">+</button>
+                        <button id="btn-zoom-out" title="Zoom Out" class="control-btn" aria-label="Zoom out">−</button>
+                        <button id="btn-zoom-fit" title="Fit Screen" class="control-btn" aria-label="Fit screen">⊙</button>
+                        <div class="divider"></div>
+                        <button id="btn-graph-theme" title="Toggle Graph Theme (Dark/Light)" class="control-btn" aria-label="Toggle graph theme" aria-pressed="true">◐</button>
                         <div class="divider"></div>
                         <div class="pan-controls">
-                            <button id="btn-pan-up" title="Pan Up" class="control-btn">↑</button>
+                            <button id="btn-pan-up" title="Pan Up" class="control-btn" aria-label="Pan up">↑</button>
                             <div class="pan-row">
-                                <button id="btn-pan-left" title="Pan Left" class="control-btn">←</button>
-                                <button id="btn-pan-down" title="Pan Down" class="control-btn">↓</button>
-                                <button id="btn-pan-right" title="Pan Right" class="control-btn">→</button>
+                                <button id="btn-pan-left" title="Pan Left" class="control-btn" aria-label="Pan left">←</button>
+                                <button id="btn-pan-down" title="Pan Down" class="control-btn" aria-label="Pan down">↓</button>
+                                <button id="btn-pan-right" title="Pan Right" class="control-btn" aria-label="Pan right">→</button>
                             </div>
                         </div>
                     </div>
@@ -131,6 +150,7 @@
                         <div class="preset-buttons">
                             <button class="preset-btn" data-preset="all">All Data</button>
                             <button class="preset-btn" data-preset="summary">Investigation Summary</button>
+                            <button class="preset-btn" data-preset="audit">Audit Trail</button>
                             <button class="preset-btn" data-preset="custom">Custom Selection</button>
                         </div>
                     </div>
@@ -178,11 +198,25 @@
 
     <!-- Application Logic -->
     <script src="js/app-core.js"></script>
+    <script src="js/shared-utils.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/perf-monitor.js"></script>
     <script src="js/ifsc.js"></script>
     <script src="js/app.js"></script>
     <script src="js/table.js"></script>
     <script src="js/mindmap.js"></script>
     <script src="js/export.js"></script>
+
+    <script>
+    // Service Worker — app-shell cache. Skipped on file:// (unsupported).
+    if ('serviceWorker' in navigator && (location.protocol === 'http:' || location.protocol === 'https:')) {
+        window.addEventListener('load', function() {
+            navigator.serviceWorker.register('sw.js').catch(function(err) {
+                console.warn('Service Worker registration skipped:', err);
+            });
+        });
+    }
+    </script>
 
 </body>
 </html>

@@ -24,6 +24,14 @@
     var ifscApiTested = false;
     var ifscCallbackQueue = {}; // { IFSC: [callback, ...] } for pending lookups
 
+    // Cache freshness policy (config overridable via App.config).
+    //  - CACHE_TTL_MS: resolved entries older than this are re-fetched in the
+    //    background (stale-while-revalidate) instead of being served forever.
+    //  - FALLBACK_RETRY_MS: fallback entries are re-attempted after this delay,
+    //    so an offline/pending lookup can never permanently poison the cache.
+    var CACHE_TTL_MS = ((App.config && App.config.IFSC_CACHE_TTL_DAYS) || 30) * 24 * 60 * 60 * 1000;
+    var FALLBACK_RETRY_MS = ((App.config && App.config.IFSC_FALLBACK_RETRY_HOURS) || 24) * 60 * 60 * 1000;
+
     // fetch() wrapper with an abort timeout so a hanging network request can
     // never leave cells stuck on "Looking up..." or deadlock the bulk queue.
     function fetchWithTimeout(url, options, timeoutMs) {
@@ -176,26 +184,22 @@ function lookupIFSC(ifscCode, callback) {
     }
     var clean = String(ifscCode).trim().toUpperCase();
 
-    // Check Cache
-    if (ifscCache[clean] && ifscCache[clean].status !== "pending") {
-        callback(ifscCache[clean]);
+    // Stale-while-revalidate: a cached entry is served instantly even when
+    // stale; stale entries are refreshed in the background so the cache never
+    // stays permanently wrong (and fallbacks never permanently poison it).
+    var cached = ifscCache[clean];
+    if (cached && cached.status !== "pending") {
+        var age = Date.now() - (cached.ts || 0);
+        var isStaleResolved = cached.status === "resolved" && age > CACHE_TTL_MS;
+        var isStaleFallback = cached.status === "fallback" && age > FALLBACK_RETRY_MS;
+        callback(cached);
+        if (isStaleResolved || isStaleFallback) {
+            revalidateInBackground(clean);
+        }
         return;
     }
 
-    var fallbackBank = getBankNameFromIFSC(clean);
-    var fallbackData = {
-        address: fallbackBank + " (Address Lookup Offline/Failed)",
-        bank: fallbackBank,
-        branch: "",
-        status: "fallback"
-    };
-
-    if (ifscApiBlocked) {
-        ifscCache[clean] = fallbackData;
-        saveCacheSafe();
-        callback(fallbackData);
-        return;
-    }
+    var fallbackData = makeFallbackData(clean);
 
     // Check if there's already a pending request for this IFSC
     if (ifscCache[clean] && ifscCache[clean].status === "pending") {
@@ -207,66 +211,34 @@ function lookupIFSC(ifscCode, callback) {
         return;
     }
 
-    ifscCache[clean] = { status: "pending" };
-
-        var apiUrl = (App.config && App.config.RAZORPAY_IFSC_API_URL) ? App.config.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
-
-    var fetchOptions = {};
-        var apiKey = (App.config && (App.config.IFSC_API_KEY || App.config.RAZORPAY_IFSC_API_KEY));
-    if (apiKey) {
-        fetchOptions.headers = {
-            "Authorization": "Bearer " + apiKey,
-            "X-API-Key": apiKey
-        };
+    if (ifscApiBlocked) {
+        var fbBlocked = withTs(fallbackData);
+        ifscCache[clean] = fbBlocked;
+        saveCacheSafe();
+        callback(fbBlocked);
+        return;
     }
 
-    fetchWithTimeout(apiUrl + clean, fetchOptions, 15000)
+    ifscCache[clean] = { status: "pending" };
 
-        .then(function(response) {
-            if (!response.ok) {
-                throw new Error("IFSC Lookup Failed");
-            }
-            return response.json();
-        })
-        .then(function(data) {
-            var branch = data.BRANCH || "";
-            var address = data.ADDRESS || "";
-            var city = data.CITY || "";
-            var state = data.STATE || "";
-            
-            var resolvedAddr = branch + " Branch, " + address;
-            if (city) resolvedAddr += ", " + city;
-            if (state) resolvedAddr += ", " + state;
-
-            // Preserve all available returned fields
-            var result = {
-                address: resolvedAddr,
-                bank: data.BANK || fallbackBank,
-                branch: branch,
-                city: city,
-                state: state,
-                district: data.DISTRICT || "",
-                contact: data.CONTACT || "",
-                micr: data.MICR || "",
-                rtgs: data.RTGS || false,
-                neft: data.NEFT || false,
-                imps: data.IMPS || false,
-                upi: data.UPI || false,
-                status: "resolved"
-            };
-
-            ifscCache[clean] = result;
+    fetchIfsc(clean)
+        .then(function(result) {
+            ifscCache[clean] = withTs(result);
             saveCacheSafe();
-            // Call the primary callback
+            if (App.Storage && App.Storage.clearIfscQueueItem) App.Storage.clearIfscQueueItem(clean);
             callback(result);
-            // Call any queued callbacks
             firePendingCallbacks(clean, result);
         })
         .catch(function(err) {
-            // Save fallback to cache temporarily to prevent repeat calls during this session
-            ifscCache[clean] = fallbackData;
+            // Save fallback to cache temporarily so repeated lookups during this
+            // session are cheap; it will be re-attempted after the retry TTL.
+            var fb = withTs(fallbackData);
+            ifscCache[clean] = fb;
+            saveCacheSafe();
             callback(fallbackData);
             firePendingCallbacks(clean, fallbackData);
+            // Queue the failed lookup for automatic retry when back online.
+            if (App.Storage && App.Storage.queueIfscLookup) App.Storage.queueIfscLookup(clean);
         });
 
     function firePendingCallbacks(code, result) {
@@ -279,6 +251,128 @@ function lookupIFSC(ifscCode, callback) {
         }
     }
 };
+
+function withTs(entry) {
+    var e = {};
+    for (var k in entry) {
+        if (Object.prototype.hasOwnProperty.call(entry, k)) e[k] = entry[k];
+    }
+    e.ts = Date.now();
+    return e;
+}
+
+function makeFallbackData(clean) {
+    var fb = getBankNameFromIFSC(clean);
+    return {
+        address: fb + " (Address Lookup Offline/Failed)",
+        bank: fb,
+        branch: "",
+        status: "fallback"
+    };
+}
+
+// Network fetch for a single IFSC — returns a Promise of the resolved record.
+function fetchIfsc(clean) {
+    var apiUrl = (App.config && App.config.RAZORPAY_IFSC_API_URL) ? App.config.RAZORPAY_IFSC_API_URL : "https://ifsc.razorpay.com/";
+    var fetchOptions = {};
+    var apiKey = (App.config && (App.config.IFSC_API_KEY || App.config.RAZORPAY_IFSC_API_KEY));
+    if (apiKey) {
+        fetchOptions.headers = {
+            "Authorization": "Bearer " + apiKey,
+            "X-API-Key": apiKey
+        };
+    }
+
+    return fetchWithTimeout(apiUrl + clean, fetchOptions, 15000)
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error("IFSC Lookup Failed");
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            var branch = data.BRANCH || "";
+            var address = data.ADDRESS || "";
+            var city = data.CITY || "";
+            var state = data.STATE || "";
+            var resolvedAddr = branch + " Branch, " + address;
+            if (city) resolvedAddr += ", " + city;
+            if (state) resolvedAddr += ", " + state;
+
+            return {
+                address: resolvedAddr,
+                bank: data.BANK || getBankNameFromIFSC(clean),
+                branch: branch,
+                city: city,
+                state: state,
+                district: data.DISTRICT || "",
+                contact: data.CONTACT || "",
+                micr: data.MICR || "",
+                rtgs: data.RTGS || false,
+                neft: data.NEFT || false,
+                imps: data.IMPS || false,
+                upi: data.UPI || false,
+                status: "resolved"
+            };
+        });
+}
+
+// Background refresh of a stale cache entry (never blocks the UI).
+var REVALIDATING = {};
+function revalidateInBackground(clean) {
+    if (REVALIDATING[clean]) return;
+    REVALIDATING[clean] = true;
+    if (ifscApiBlocked) { delete REVALIDATING[clean]; return; }
+
+    testIfscApi().then(function(isOk) {
+        if (!isOk) { delete REVALIDATING[clean]; return; }
+        fetchIfsc(clean)
+            .then(function(result) {
+                ifscCache[clean] = withTs(result);
+                saveCacheSafe();
+                if (App.Storage && App.Storage.clearIfscQueueItem) App.Storage.clearIfscQueueItem(clean);
+                var ev = new CustomEvent('ifsc-resolved', { detail: { code: clean, result: result } });
+                document.dispatchEvent(ev);
+            })
+            .catch(function() {
+                // Keep the old value; retry when connectivity returns.
+                if (App.Storage && App.Storage.queueIfscLookup) App.Storage.queueIfscLookup(clean);
+            })
+            .then(function() {
+                delete REVALIDATING[clean];
+            });
+    });
+}
+
+// Auto-retry queued failures when the browser comes back online.
+function processIfscQueue() {
+    if (!(App.Storage && App.Storage.listIfscQueue)) return;
+    App.Storage.listIfscQueue().then(function(items) {
+        if (!items || items.length === 0) return;
+        resetApiBlocked();
+        testIfscApi().then(function(isOk) {
+            if (!isOk) return;
+            items.forEach(function(item) {
+                var clean = String(item.code).trim().toUpperCase();
+                delete ifscCache[clean];
+                lookupIFSC(clean, function(result) {
+                    if (result.status === 'resolved' && App.Storage.clearIfscQueueItem) {
+                        App.Storage.clearIfscQueueItem(clean);
+                    }
+                });
+            });
+        });
+    });
+}
+
+function resetApiBlocked() {
+    ifscApiBlocked = false;
+    ifscApiTested = false;
+}
+
+document.addEventListener('online', function() {
+    processIfscQueue();
+});
 
 
 function getIFSCCachedSync(ifscCode) {
@@ -377,7 +471,16 @@ function startBulkIFSCResolution(ifscInput, onComplete, onProgress) {
     var ifscList = (ifscInput instanceof Array) ? ifscInput.slice() : Array.from(ifscInput);
     ifscList = ifscList.filter(function(code) {
         var clean = String(code).trim().toUpperCase();
-        return !ifscCache[clean] || (ifscCache[clean].status !== 'resolved' && ifscCache[clean].status !== 'fallback');
+        var c = ifscCache[clean];
+        if (!c || c.status === 'pending') return true;
+        if (c.status === 'resolved' || c.status === 'fallback') {
+            // Fresh entries are skipped; stale ones are re-attempted so the
+            // cache self-heals even if it was populated during an outage.
+            var age = Date.now() - (c.ts || 0);
+            var stale = c.status === 'resolved' ? age > CACHE_TTL_MS : age > FALLBACK_RETRY_MS;
+            return stale;
+        }
+        return true;
     });
 
     if (ifscList.length === 0) {
@@ -391,14 +494,15 @@ function startBulkIFSCResolution(ifscInput, onComplete, onProgress) {
             ifscList.forEach(function(code) {
                 var clean = String(code).trim().toUpperCase();
                 var fb = getBankNameFromIFSC(clean);
-                ifscCache[clean] = {
+                ifscCache[clean] = withTs({
                     address: fb + " (Address Lookup Offline/Failed)",
                     bank: fb,
                     branch: "",
                     status: "fallback"
-                };
+                });
             });
             saveCacheSafe();
+            if (onProgress) onProgress(ifscList.length, ifscList.length);
             if (onComplete) onComplete();
             return;
         }
@@ -450,6 +554,9 @@ function startBulkIFSCResolution(ifscInput, onComplete, onProgress) {
     IFSC.safeExtractIFSC = safeExtractIFSC;
     IFSC.startBulkIFSCResolution = startBulkIFSCResolution;
     IFSC.getCache = function() { return ifscCache; };
+    IFSC.revalidateInBackground = revalidateInBackground;
+    IFSC.processIfscQueue = processIfscQueue;
+    IFSC.resetApiBlocked = resetApiBlocked;
 
     App.IFSC = IFSC;
 })(window.PersonallApp);

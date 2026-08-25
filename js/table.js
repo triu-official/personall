@@ -213,9 +213,15 @@ function appendEntitySection(entityName, filteredSheetsData, crossRefSet, contai
     header.addEventListener("click", () => {
         content.style.display = content.style.display === "none" ? "block" : "none";
         header.querySelector("span:last-child").innerText = content.style.display === "none" ? "\u25B6" : "\u25BC";
+        // Re-render virtual windows when content is expanded (viewport changed).
+        if (content.style.display !== "none") {
+            content.querySelectorAll(".vs-scroll").forEach(ss => {
+                ss.dispatchEvent(new Event("scroll"));
+            });
+        }
     });
 
-    // Render each sheet's transaction table
+    // Render each sheet's transaction table (virtual-scrolled)
     const sheetNames = Object.keys(filteredSheetsData);
     for (let s = 0; s < sheetNames.length; s++) {
         const sheetName = sheetNames[s];
@@ -239,9 +245,8 @@ function appendEntitySection(entityName, filteredSheetsData, crossRefSet, contai
             trHead.appendChild(th);
         });
 
-        let thAddr = null;
         if (hasIFSC) {
-            thAddr = document.createElement("th");
+            const thAddr = document.createElement("th");
             thAddr.innerHTML = 'Bank Branch & Address <span class="ifsc-status-badge" style="font-size: 0.8em; font-weight: normal; margin-left: 5px; color: #7f8c8d;"></span>';
             thAddr.className = "resolved-address-header";
             trHead.appendChild(thAddr);
@@ -252,170 +257,167 @@ function appendEntitySection(entityName, filteredSheetsData, crossRefSet, contai
 
         const tbody = document.createElement("tbody");
         table.appendChild(tbody);
-        txnSection.appendChild(table);
 
-        const paginationControls = document.createElement("div");
-        paginationControls.className = "pagination-controls";
-        paginationControls.style.display = "none";
-        const prevBtn = document.createElement("button");
-        const pageInfo = document.createElement("span");
-        const nextBtn = document.createElement("button");
-        paginationControls.appendChild(prevBtn);
-        paginationControls.appendChild(pageInfo);
-        paginationControls.appendChild(nextBtn);
-        txnSection.appendChild(paginationControls);
+        const vsScroll = document.createElement("div");
+        vsScroll.className = "vs-scroll";
+        vsScroll.appendChild(table);
+        txnSection.appendChild(vsScroll);
 
-        const ROWS_PER_PAGE = 50;
-        table.filteredRows = rows;
-        table.currentPage = 1;
-
-        table.renderPage = () => {
-            const totalPages = Math.ceil(table.filteredRows.length / ROWS_PER_PAGE) || 1;
-            if (table.currentPage > totalPages) table.currentPage = totalPages;
-
-            tbody.innerHTML = "";
-            const start = (table.currentPage - 1) * ROWS_PER_PAGE;
-            const end = start + ROWS_PER_PAGE;
-            const pageRows = table.filteredRows.slice(start, end);
-
-            let ifscCellsToUpdate = [];
-
-            for (let r = 0; r < pageRows.length; r++) {
-                const row = pageRows[r];
-                const tr = document.createElement("tr");
-                originalHeaders.forEach(col => {
-                    const td = document.createElement("td");
-                    // Apply global formatting logic to amounts
-                    if (col.toLowerCase().includes("amount") && typeof row[col] !== 'undefined') {
-                        td.innerText = (App.formatters && App.formatters.amount) ? App.formatters.amount(row[col]) : (row[col] !== null ? row[col] : "—");
-                    } else {
-                        td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
-                    }
-                    td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
-                    tr.appendChild(td);
-                });
-
-                if (hasIFSC) {
-                    const tdAddr = document.createElement("td");
-                    tdAddr.className = "resolved-address-cell";
-                    const ifscVal = ifscGetRowIFSC(sheetName, row);
-                    const clean = ifscExtractCode(ifscVal);
-
-                    if (clean) {
-                        const cleanUpper = String(clean).trim().toUpperCase();
-                        const cached = ifscGetCache()[cleanUpper];
-
-                        let addressHtml = "";
-                        if (cached && cached.status === 'resolved') {
-                            addressHtml = cached.address;
-                        } else if (cached && cached.status === 'fallback') {
-                            addressHtml = cached.address + ' <button class="retry-ifsc-btn" data-ifsc="'+cleanUpper+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
-                        } else {
-                            addressHtml = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                            ifscCellsToUpdate.push({ td: tdAddr, ifsc: cleanUpper, source: ifscVal.source || 'row_cell' });
-                        }
-
-                        if (ifscVal && ifscVal.source === 'sheet_metadata') {
-                            addressHtml += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
-                        }
-                        tdAddr.innerHTML = addressHtml;
-                        tdAddr.dataset.source = ifscVal.source;
-                        if (cleanUpper) tdAddr.dataset.ifsc = cleanUpper;
-                    } else {
-                        tdAddr.innerText = "-";
-                    }
-                    tr.appendChild(tdAddr);
-                }
-
-                tbody.appendChild(tr);
-            }
-
-            // Attach retry handlers
-            if (hasIFSC) {
-                const retryBtns = tbody.querySelectorAll('.retry-ifsc-btn');
-                retryBtns.forEach(btn => {
-                    btn.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        const code = this.dataset.ifsc;
-                        this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                        // Delete fallback from cache to force network call
-                        if (ifscGetCache()[code]) {
-                            delete ifscGetCache()[code];
-                        }
-                        ifscLookup(code, function(details) {
-                            // Re-render page to show new value
-                            table.renderPage();
-                        });
-                    });
-                });
-            }
-
-            // Trigger resolution for cells that need it (if any were not already cached or falling back)
-            ifscCellsToUpdate.forEach(item => {
-                ifscLookup(item.ifsc, function(details) {
-                    // Update cell if still in DOM
-                    if (document.body.contains(item.td)) {
-                        let html = details.address;
-                        if (details.status === 'fallback') {
-                            html += ' <button class="retry-ifsc-btn" data-ifsc="'+item.ifsc+'" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
-                        }
-                        if (item.source === 'sheet_metadata') {
-                            html += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
-                        }
-                        item.td.innerHTML = html;
-
-                        if (details.status === 'fallback') {
-                            // Attach event to this specific dynamically added button
-                            const retryBtn = item.td.querySelector('.retry-ifsc-btn');
-                            if (retryBtn) {
-                                retryBtn.addEventListener('click', function(e) {
-                                    e.preventDefault();
-                                    const code = this.dataset.ifsc;
-                                    this.parentNode.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
-                                    if (ifscGetCache()[code]) delete ifscGetCache()[code];
-                                    ifscLookup(code, function() { table.renderPage(); });
-                                });
-                            }
-                        }
-                    }
-                });
-            });
-
-            setupPrimaryEntityToggle(true);
-
-            if (totalPages > 1) {
-                paginationControls.style.display = "flex";
-                prevBtn.innerText = "Previous";
-                prevBtn.disabled = table.currentPage === 1;
-                pageInfo.innerText = `Page ${table.currentPage} of ${totalPages}`;
-                nextBtn.innerText = "Next";
-                nextBtn.disabled = table.currentPage === totalPages;
-            } else {
-                paginationControls.style.display = "none";
-            }
-        };
-
-        prevBtn.addEventListener("click", () => {
-            if (table.currentPage > 1) {
-                table.currentPage--;
-                table.renderPage();
-            }
-        });
-
-        nextBtn.addEventListener("click", () => {
-            const totalPages = Math.ceil(table.filteredRows.length / ROWS_PER_PAGE);
-            if (table.currentPage < totalPages) {
-                table.currentPage++;
-                table.renderPage();
-            }
-        });
-
-        table.renderPage();
+        setupVirtualScroll(vsScroll, table, sheetName, originalHeaders, hasIFSC, rows);
         content.appendChild(txnSection);
     }
 
     entityDiv.appendChild(content);
     container.appendChild(entityDiv);
+}
+
+// ---------------------------------------------------------------
+// Virtual scrolling — render only visible rows (fixed row height) so
+// sheets with thousands of rows stay smooth without a DOM explosion.
+// ---------------------------------------------------------------
+const VIRTUAL_ROW_HEIGHT = 36;
+const VIRTUAL_BUFFER = 10;
+
+function createTableRow(sheetName, originalHeaders, hasIFSC, row) {
+    const tr = document.createElement("tr");
+    originalHeaders.forEach(col => {
+        const td = document.createElement("td");
+        if (col.toLowerCase().includes("amount") && typeof row[col] !== 'undefined') {
+            td.innerText = (App.formatters && App.formatters.amount) ? App.formatters.amount(row[col]) : (row[col] !== null ? row[col] : "—");
+        } else {
+            td.innerText = row[col] !== null && row[col] !== undefined ? row[col] : "";
+        }
+        td.className = isPrimaryEntityCol(col) ? "primary-entity-col" : "";
+        tr.appendChild(td);
+    });
+
+    if (hasIFSC) {
+        const tdAddr = document.createElement("td");
+        tdAddr.className = "resolved-address-cell";
+        const ifscVal = ifscGetRowIFSC(sheetName, row);
+        const clean = ifscExtractCode(ifscVal);
+
+        if (clean) {
+            const cleanUpper = String(clean).trim().toUpperCase();
+            const cached = ifscGetCache()[cleanUpper];
+            const source = ifscVal && ifscVal.source ? ifscVal.source : 'row_cell';
+
+            if (cached && cached.status === 'resolved') {
+                tdAddr.innerHTML = cached.address;
+            } else if (cached && cached.status === 'fallback') {
+                tdAddr.innerHTML = cached.address + ' <button class="retry-ifsc-btn" data-ifsc="' + cleanUpper + '" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+            } else {
+                // Unknown or in-flight: show placeholder, request resolution once.
+                tdAddr.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
+                if (!cached || cached.status !== 'pending') {
+                    ifscLookup(cleanUpper, function (details) {
+                        updateIfscCell(tdAddr, cleanUpper, details, source);
+                    });
+                }
+            }
+
+            tdAddr.dataset.source = source;
+            tdAddr.dataset.ifsc = cleanUpper;
+
+            if (source === 'sheet_metadata') {
+                tdAddr.innerHTML += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
+            }
+        } else {
+            tdAddr.innerText = "-";
+        }
+        tr.appendChild(tdAddr);
+    }
+    return tr;
+}
+
+function updateIfscCell(td, code, details, source) {
+    if (!td || !document.body.contains(td)) return;
+    let html = details.address;
+    if (details.status === 'fallback') {
+        html += ' <button class="retry-ifsc-btn" data-ifsc="' + code + '" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
+    }
+    if (source === 'sheet_metadata') {
+        html += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
+    }
+    td.innerHTML = html;
+}
+
+function setupVirtualScroll(scrollEl, table, sheetName, originalHeaders, hasIFSC, rows) {
+    const tbody = table.querySelector('tbody');
+    const colCount = originalHeaders.length + (hasIFSC ? 1 : 0);
+
+    function renderWindow() {
+        const scrollTop = scrollEl.scrollTop || 0;
+        const viewportH = scrollEl.clientHeight || 300;
+        const total = rows.length;
+        if (total === 0) {
+            tbody.innerHTML = "";
+            return;
+        }
+
+        const start = Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_BUFFER);
+        const visibleCount = Math.ceil(viewportH / VIRTUAL_ROW_HEIGHT) + VIRTUAL_BUFFER * 2;
+        const end = Math.min(total, start + visibleCount);
+
+        tbody.innerHTML = "";
+
+        // Top spacer keeps scroll position aligned with the real row grid.
+        if (start > 0) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = colCount;
+            td.style.height = (start * VIRTUAL_ROW_HEIGHT) + "px";
+            td.style.padding = "0";
+            td.style.border = "none";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+
+        for (let i = start; i < end; i++) {
+            tbody.appendChild(createTableRow(sheetName, originalHeaders, hasIFSC, rows[i]));
+        }
+
+        if (end < total) {
+            const tr = document.createElement("tr");
+            const td = document.createElement("td");
+            td.colSpan = colCount;
+            td.style.height = ((total - end) * VIRTUAL_ROW_HEIGHT) + "px";
+            td.style.padding = "0";
+            td.style.border = "none";
+            tr.appendChild(td);
+            tbody.appendChild(tr);
+        }
+
+        setupPrimaryEntityToggle(true);
+    }
+
+    let rafPending = false;
+    scrollEl.addEventListener("scroll", function () {
+        if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(function () {
+                rafPending = false;
+                renderWindow();
+            });
+        }
+    });
+
+    // Delegated retry-click handling (rows are recreated on scroll).
+    scrollEl.addEventListener("click", function (e) {
+        const target = e.target;
+        if (!target || !target.classList || !target.classList.contains("retry-ifsc-btn")) return;
+        e.preventDefault();
+        const code = target.dataset.ifsc;
+        const td = target.closest ? target.closest("td") : null;
+        const source = td ? (td.dataset.source || "row_cell") : "row_cell";
+        if (ifscGetCache()[code]) delete ifscGetCache()[code];
+        if (td) td.innerHTML = '<span style="color:#7f8c8d;font-style:italic;">Looking up...</span>';
+        ifscLookup(code, function (details) {
+            updateIfscCell(td, code, details, source);
+        });
+    });
+
+    renderWindow();
 }
 
 function checkCrossReference(prevLayerKey, currentEntityName) {
@@ -430,48 +432,17 @@ function buildCrossReferenceSet(prevLayerKey) {
     const prevLayerEntities = App.state.structuredData[prevLayerKey];
     if (!prevLayerEntities) return linked;
 
-    const primaryPatterns = App.state.primaryEntityPatterns || [];
-
     for (const senderEntity in prevLayerEntities) {
         for (const sheetName in prevLayerEntities[senderEntity]) {
             const rows = prevLayerEntities[senderEntity][sheetName];
             if (!rows || !rows.length) continue;
 
-            const rowKeys = Object.keys(rows[0] || {});
-            let entityCol = null;
-            for (let ki = 0; ki < rowKeys.length; ki++) {
-                const kl = rowKeys[ki].toLowerCase();
-                for (let pi = 0; pi < primaryPatterns.length; pi++) {
-                    if (kl.includes(primaryPatterns[pi])) {
-                        entityCol = rowKeys[ki];
-                        break;
-                    }
-                }
-                if (entityCol) break;
-            }
-
-            let receiverCol = null;
-            for (let ki = 0; ki < rowKeys.length; ki++) {
-                const kl = rowKeys[ki].toLowerCase();
-                if (rowKeys[ki] === entityCol) continue;
-
-                if (kl.includes("to account") ||
-                    kl.includes("beneficiary") ||
-                    kl.includes("receiver") ||
-                    kl.includes("transferred to") ||
-                    kl.includes("destination") ||
-                    kl === "account no" ||
-                    kl === "to_account" ||
-                    kl === "toacc") {
-                    receiverCol = rowKeys[ki];
-                    break;
-                }
-            }
-
-            const isMoneyTransfer = sheetName.toLowerCase().includes("money transfer") ||
-                                    sheetName.toLowerCase().includes("transfer") ||
-                                    sheetName.toLowerCase().includes("fund flow") ||
-                                    receiverCol !== null;
+            const headers = App.state.rawData && App.state.rawData[sheetName]
+                ? App.state.rawData[sheetName].headers
+                : Object.keys(rows[0] || {});
+            const entityCol = App.Utils.findEntityCol(headers);
+            const receiverCol = App.Utils.findReceiverCol(headers, entityCol);
+            const isMoneyTransfer = App.Utils.isMoneyTransferSheet(sheetName, headers, entityCol);
 
             if (isMoneyTransfer && receiverCol) {
                 for (const row of rows) {
@@ -523,9 +494,9 @@ function performSearch(queryText = null, updateWindowRef = true) {
     const navigator = document.getElementById("layer-navigator");
     const summaryBar = document.getElementById("search-summary-bar");
 
-    // 1. Get search statistics using the flat index (single pass).
-    //    Also collect per-layer entity sets here so the sidebar below never
-    //    has to re-scan the index (previous code was O(layers x index)).
+    // 1. Get search statistics. Uses the inverted trigram index to narrow the
+    //    candidate set when the query is long enough; otherwise falls back to
+    //    a full scan of the flat index (correct in both cases).
     let totalMatches = 0;
     const layerMatchCounts = {};
     const matchedLayersSet = new Set();
@@ -534,10 +505,14 @@ function performSearch(queryText = null, updateWindowRef = true) {
 
     if (query !== "") {
         const searchIndex = App.state.searchIndex;
-        for (let i = 0; i < searchIndex.length; i++) {
-            if (searchIndex[i].normalizedText.includes(query)) {
+        const candidates = App.Utils.searchCandidates(App.state.searchIndexMap, query);
+        const range = candidates ? candidates.length : searchIndex.length;
+
+        for (let i = 0; i < range; i++) {
+            const idx = candidates ? candidates[i] : i;
+            if (searchIndex[idx].normalizedText.includes(query)) {
                 totalMatches++;
-                const m = searchIndex[i];
+                const m = searchIndex[idx];
                 matchedLayersSet.add(m.layer);
                 matchedEntitiesSet.add(m.entity);
                 layerMatchCounts[m.layer] = (layerMatchCounts[m.layer] || 0) + 1;
@@ -698,9 +673,12 @@ function getMatchingEntityCountForLayer(layerKey, query) {
 function getLayerMatchCount(layerKey, query) {
     if (!query) return 0;
     const searchIndex = App.state.searchIndex;
+    const candidates = App.Utils.searchCandidates(App.state.searchIndexMap, query);
+    const range = candidates ? candidates.length : searchIndex.length;
     let count = 0;
-    for (let i = 0; i < searchIndex.length; i++) {
-        if (searchIndex[i].layer === layerKey && searchIndex[i].normalizedText.includes(query)) {
+    for (let i = 0; i < range; i++) {
+        const idx = candidates ? candidates[i] : i;
+        if (searchIndex[idx].layer === layerKey && searchIndex[idx].normalizedText.includes(query)) {
             count++;
         }
     }
@@ -715,15 +693,7 @@ document.addEventListener('ifsc-resolved', function(e) {
     var cells = document.querySelectorAll('td[data-ifsc="' + code + '"]');
     for (var i = 0; i < cells.length; i++) {
         var td = cells[i];
-        var html = result.address;
-        if (result.status === 'fallback') {
-            html += ' <button class="retry-ifsc-btn" data-ifsc="' + code + '" title="Retry Online Lookup" style="background:none;border:none;cursor:pointer;font-size:12px;">🔄</button>';
-        }
-        var source = td.dataset.source;
-        if (source === 'sheet_metadata') {
-            html += ' <span style="font-size: 0.75em; color: #95a5a6; display: block;">(Sheet-level IFSC)</span>';
-        }
-        td.innerHTML = html;
+        updateIfscCell(td, code, result, td.dataset.source || 'row_cell');
     }
 });
 

@@ -22,7 +22,7 @@
             searchIndex: [],
             mindMapReady: false,
             cy: null,
-            primaryEntityPatterns: ["accountno", "walletid", "pgid", "paid", "customer", "entity", "sender"],
+            primaryEntityPatterns: ["account no", "accountno", "wallet", "pg", "pa", "customer", "sender", "entity", "walletid", "pgid"],
             layerPatterns: ["layer", "lyr"],
             sheetIFSC: {},
             forceFullGraph: false,
